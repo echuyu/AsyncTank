@@ -3,66 +3,57 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Prompt Bastion Prototype</title>
+    <title>AsyncTank Katamari BOT</title>
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
-    <main class="app-shell">
-      <section class="arena-band">
-        <div class="topbar">
+    <main class="game-shell">
+      <section id="scene" class="scene" aria-label="3D battle scene"></section>
+
+      <header class="hud">
+        <div class="brand">
+          <p>ASYNC TANK</p>
+          <h1>Katamari BOT</h1>
+        </div>
+        <div class="meters" aria-label="battle meters">
+          <div class="meter blue"><span id="playerHp"></span></div>
+          <strong id="clock">0.0</strong>
+          <div class="meter red"><span id="enemyHp"></span></div>
+        </div>
+        <div class="actions">
+          <button id="battleBtn" type="button">BATTLE</button>
+          <button id="resetBtn" type="button">RESET</button>
+        </div>
+      </header>
+
+      <aside class="builder">
+        <div class="builder-top">
           <div>
-            <p class="eyebrow">ASYNC BOT BATTLE</p>
-            <h1>Prompt Bastion</h1>
+            <p class="label">BOT</p>
+            <h2 id="botName">Mono Core</h2>
           </div>
-          <button id="runBattle" class="primary-button" type="button">Battle</button>
+          <div class="status-pill" id="battleState">READY</div>
         </div>
-        <canvas id="arena" width="960" height="540" aria-label="battle arena"></canvas>
-        <div class="battle-readout">
-          <span id="battleStatus">BOTを組んで Battle を押してください</span>
-          <span id="battleTimer">0.0s</span>
+
+        <div class="body-map" id="bodyMap" aria-label="part mounts">
+          <div class="body-core">CORE</div>
         </div>
-      </section>
 
-      <section class="workbench">
-        <nav class="tabs" aria-label="editor tabs">
-          <button class="tab active" data-tab="build" type="button">Build</button>
-          <button class="tab" data-tab="code" type="button">Code</button>
-          <button class="tab" data-tab="versus" type="button">Versus</button>
-        </nav>
+        <div class="palette" id="palette" aria-label="part palette"></div>
 
-        <section id="buildTab" class="tab-panel active">
-          <div class="team-header">
-            <label>
-              Team name
-              <input id="teamName" type="text" value="Rush Seed" maxlength="24">
-            </label>
-            <button id="randomize" class="icon-button" type="button" title="ランダム構築">Shuffle</button>
-          </div>
-          <div id="unitEditors" class="unit-grid"></div>
-        </section>
+        <div class="preset-row" id="presets" aria-label="bot presets"></div>
 
-        <section id="codeTab" class="tab-panel">
-          <div class="code-actions">
-            <button id="exportDsl" type="button">Export BOT Code</button>
-            <button id="importDsl" type="button">Import BOT Code</button>
-            <button id="copyShare" type="button">Make Share Code</button>
-          </div>
-          <textarea id="botCode" spellcheck="false"></textarea>
-          <p class="hint">外部LLMには「この形式でBOTコードを書いて」と渡せます。実行コードではなく、安全な宣言データだけを読み込みます。</p>
-        </section>
+        <div class="enemy-row">
+          <label for="enemySelect">ENEMY</label>
+          <select id="enemySelect"></select>
+        </div>
 
-        <section id="versusTab" class="tab-panel">
-          <div class="code-actions">
-            <button id="loadSampleEnemy" type="button">Load Sample Enemy</button>
-            <button id="loadEnemyCode" type="button">Load Enemy Code</button>
-          </div>
-          <textarea id="enemyCode" spellcheck="false" placeholder="相手のShare CodeまたはBOT Codeを貼り付け"></textarea>
-          <div class="opponent-card">
-            <strong id="enemyName">Training Wall</strong>
-            <span id="enemySummary">中距離迎撃型のサンプル相手</span>
-          </div>
-        </section>
-      </section>
+        <div class="code-row">
+          <button id="exportBtn" type="button">CODE</button>
+          <button id="importBtn" type="button">LOAD</button>
+        </div>
+        <textarea id="codeBox" spellcheck="false" aria-label="bot code"></textarea>
+      </aside>
     </main>
 
     <script src="app.js"></script>

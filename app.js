@@ -1,657 +1,789 @@
-const OPTIONS = {
-  body: {
-    light: { label: "Light", hp: 78, speed: 1.55, armor: 0.9, cost: 2 },
-    medium: { label: "Medium", hp: 105, speed: 1.18, armor: 1, cost: 3 },
-    heavy: { label: "Heavy", hp: 140, speed: 0.86, armor: 1.18, cost: 4 }
-  },
-  weapon: {
-    pulse: { label: "Pulse", range: 150, damage: 7, cooldown: 20, color: "#56c7d9", cost: 2 },
-    missile: { label: "Missile", range: 230, damage: 14, cooldown: 45, color: "#f0b94d", cost: 4 },
-    drill: { label: "Drill", range: 38, damage: 20, cooldown: 24, color: "#f05f57", cost: 3 },
-    net: { label: "Net", range: 120, damage: 4, cooldown: 36, color: "#79c267", slow: 32, cost: 2 }
-  },
-  module: {
-    dash: { label: "Dash", cost: 2 },
-    shield: { label: "Shield", cost: 3 },
-    radar: { label: "Radar", cost: 2 },
-    repair: { label: "Repair", cost: 3 }
-  },
-  place: {
-    front: { label: "Front" },
-    mid: { label: "Mid" },
-    back: { label: "Back" }
-  },
-  when: {
-    "enemy.core.visible": "Enemy core visible",
-    "hp < 40": "HP below 40%",
-    "enemy.distance > 160": "Enemy far",
-    "enemy.distance < 70": "Enemy near",
-    "ally.hp < 50": "Ally hurt",
-    "always": "Always"
-  },
-  then: {
-    "attack.core": "Attack core",
-    "attack.nearest": "Attack nearest",
-    "move.forward": "Move forward",
-    "kite": "Keep distance",
-    "shield": "Shield",
-    "repair": "Repair",
-    "cover.ally": "Cover ally"
+(async function boot() {
+  const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
+
+  const slotDefs = [
+    ["front", 0, "F"],
+    ["frontRight", Math.PI / 4, "FR"],
+    ["right", Math.PI / 2, "R"],
+    ["backRight", (Math.PI * 3) / 4, "BR"],
+    ["back", Math.PI, "B"],
+    ["backLeft", (-Math.PI * 3) / 4, "BL"],
+    ["left", -Math.PI / 2, "L"],
+    ["frontLeft", -Math.PI / 4, "FL"]
+  ].map(([id, angle, label]) => ({ id, angle, label }));
+
+  const parts = {
+    empty: { mark: "·", name: "EMPTY", color: "#687176", mass: 0 },
+    eye: { mark: "◉", name: "EYE", color: "#55d8f0", mass: 0.12 },
+    jet: { mark: "↯", name: "JET", color: "#ffb84e", mass: 0.22 },
+    spike: { mark: "▲", name: "SPIKE", color: "#ff6461", mass: 0.3 },
+    cannon: { mark: "●", name: "GUN", color: "#f4df62", mass: 0.36 },
+    shield: { mark: "▰", name: "SHIELD", color: "#7ee081", mass: 0.32 },
+    weight: { mark: "◆", name: "WEIGHT", color: "#9b8cff", mass: 0.55 }
+  };
+
+  const playerPresets = [
+    makeBlueprint("Mono Core", {
+      front: "eye",
+      frontLeft: "cannon",
+      frontRight: "spike",
+      back: "jet",
+      left: "weight",
+      right: "shield"
+    }),
+    makeBlueprint("Needle", {
+      front: "spike",
+      frontLeft: "spike",
+      frontRight: "spike",
+      back: "jet",
+      backLeft: "jet",
+      backRight: "jet",
+      left: "eye"
+    }),
+    makeBlueprint("Orbit", {
+      front: "eye",
+      left: "jet",
+      right: "cannon",
+      backLeft: "cannon",
+      backRight: "shield",
+      back: "weight"
+    }),
+    makeBlueprint("Shell", {
+      front: "cannon",
+      frontLeft: "shield",
+      frontRight: "shield",
+      left: "shield",
+      right: "shield",
+      back: "jet",
+      backLeft: "weight",
+      backRight: "weight"
+    })
+  ];
+
+  const enemyPresets = [
+    makeBlueprint("Red Ram", {
+      front: "eye",
+      frontLeft: "spike",
+      frontRight: "spike",
+      back: "jet",
+      backLeft: "jet",
+      backRight: "weight",
+      left: "shield"
+    }),
+    makeBlueprint("Sidewinder", {
+      left: "eye",
+      right: "cannon",
+      backRight: "jet",
+      frontRight: "jet",
+      front: "shield",
+      back: "weight"
+    }),
+    makeBlueprint("Citadel", {
+      front: "cannon",
+      frontLeft: "shield",
+      frontRight: "shield",
+      left: "weight",
+      right: "weight",
+      backLeft: "shield",
+      backRight: "shield",
+      back: "eye"
+    })
+  ];
+
+  const els = {
+    scene: document.querySelector("#scene"),
+    bodyMap: document.querySelector("#bodyMap"),
+    palette: document.querySelector("#palette"),
+    presets: document.querySelector("#presets"),
+    enemySelect: document.querySelector("#enemySelect"),
+    battleBtn: document.querySelector("#battleBtn"),
+    resetBtn: document.querySelector("#resetBtn"),
+    exportBtn: document.querySelector("#exportBtn"),
+    importBtn: document.querySelector("#importBtn"),
+    codeBox: document.querySelector("#codeBox"),
+    botName: document.querySelector("#botName"),
+    battleState: document.querySelector("#battleState"),
+    playerHp: document.querySelector("#playerHp"),
+    enemyHp: document.querySelector("#enemyHp"),
+    clock: document.querySelector("#clock")
+  };
+
+  let playerBlueprint = clone(playerPresets[0]);
+  let enemyBlueprint = clone(enemyPresets[0]);
+  let selectedSlot = "front";
+  let playerBot;
+  let enemyBot;
+  let projectiles = [];
+  let running = false;
+  let battleTime = 0;
+  let lastTick = performance.now();
+  let idleSpin = 0;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  els.scene.append(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x0d1012, 9, 18);
+
+  const camera = new THREE.PerspectiveCamera(43, 1, 0.1, 80);
+  const target = new THREE.Vector3(0, 0, 0);
+
+  const hemi = new THREE.HemisphereLight(0xdffaff, 0x1f1512, 2.8);
+  scene.add(hemi);
+
+  const key = new THREE.DirectionalLight(0xffffff, 3.2);
+  key.position.set(-4, 8, 5);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 22;
+  key.shadow.camera.left = -9;
+  key.shadow.camera.right = 9;
+  key.shadow.camera.top = 9;
+  key.shadow.camera.bottom = -9;
+  scene.add(key);
+
+  const arena = makeArena();
+  scene.add(arena);
+
+  initUi();
+  resetBattle();
+  resize();
+  window.addEventListener("resize", resize);
+  requestAnimationFrame(loop);
+
+  function makeBlueprint(name, slotMap) {
+    const slots = {};
+    slotDefs.forEach((slot) => {
+      slots[slot.id] = slotMap[slot.id] || "empty";
+    });
+    return { version: 2, name, slots };
   }
-};
 
-const DEFAULT_TEAM = {
-  version: 1,
-  name: "Rush Seed",
-  units: [
-    unit("Breaker", "heavy", "drill", "shield", "front", [
-      ["enemy.core.visible", "attack.core"],
-      ["hp < 40", "shield"],
-      ["enemy.distance > 160", "move.forward"]
-    ]),
-    unit("Catcher", "medium", "net", "radar", "mid", [
-      ["enemy.distance < 70", "kite"],
-      ["ally.hp < 50", "cover.ally"],
-      ["always", "attack.nearest"]
-    ]),
-    unit("Needle", "light", "pulse", "dash", "back", [
-      ["enemy.distance > 160", "move.forward"],
-      ["hp < 40", "kite"],
-      ["always", "attack.nearest"]
-    ])
-  ]
-};
+  function initUi() {
+    renderBodyMap();
+    renderPalette();
+    renderPresets();
+    enemyPresets.forEach((preset, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = preset.name;
+      els.enemySelect.append(option);
+    });
 
-const SAMPLE_ENEMY = {
-  version: 1,
-  name: "Training Wall",
-  units: [
-    unit("Anchor", "heavy", "missile", "repair", "back", [
-      ["hp < 40", "repair"],
-      ["enemy.distance > 160", "attack.nearest"],
-      ["always", "attack.core"]
-    ]),
-    unit("Guard", "medium", "pulse", "shield", "mid", [
-      ["enemy.distance < 70", "shield"],
-      ["ally.hp < 50", "cover.ally"],
-      ["always", "attack.nearest"]
-    ]),
-    unit("Hook", "light", "net", "dash", "front", [
-      ["enemy.distance > 160", "move.forward"],
-      ["enemy.distance < 70", "kite"],
-      ["always", "attack.nearest"]
-    ])
-  ]
-};
+    els.bodyMap.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-slot]");
+      if (!button) return;
+      selectedSlot = button.dataset.slot;
+      renderBodyMap();
+    });
 
-let team = clone(DEFAULT_TEAM);
-let enemyTeam = clone(SAMPLE_ENEMY);
-let sim = null;
-let lastFrame = 0;
+    els.palette.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-part]");
+      if (!button) return;
+      playerBlueprint.slots[selectedSlot] = button.dataset.part;
+      els.codeBox.value = encodeBlueprint(playerBlueprint);
+      renderBodyMap();
+      resetBattle();
+    });
 
-const els = {
-  canvas: document.querySelector("#arena"),
-  status: document.querySelector("#battleStatus"),
-  timer: document.querySelector("#battleTimer"),
-  run: document.querySelector("#runBattle"),
-  teamName: document.querySelector("#teamName"),
-  unitEditors: document.querySelector("#unitEditors"),
-  botCode: document.querySelector("#botCode"),
-  enemyCode: document.querySelector("#enemyCode"),
-  enemyName: document.querySelector("#enemyName"),
-  enemySummary: document.querySelector("#enemySummary")
-};
+    els.presets.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-preset]");
+      if (!button) return;
+      playerBlueprint = clone(playerPresets[Number(button.dataset.preset)]);
+      selectedSlot = "front";
+      els.codeBox.value = encodeBlueprint(playerBlueprint);
+      renderBodyMap();
+      renderPresets();
+      resetBattle();
+    });
 
-const ctx = els.canvas.getContext("2d");
+    els.enemySelect.addEventListener("change", () => {
+      enemyBlueprint = clone(enemyPresets[Number(els.enemySelect.value)]);
+      resetBattle();
+    });
 
-function unit(name, body, weapon, module, place, rules) {
-  return {
-    name,
-    body,
-    weapon,
-    module,
-    place,
-    rules: rules.map(([when, then]) => ({ when, then }))
-  };
-}
+    els.battleBtn.addEventListener("click", () => {
+      resetBattle();
+      running = true;
+      els.battleState.textContent = "FIGHT";
+    });
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
+    els.resetBtn.addEventListener("click", resetBattle);
 
-function optionTags(group, selected) {
-  return Object.entries(OPTIONS[group])
-    .map(([value, item]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${item.label || item}</option>`)
-    .join("");
-}
+    els.exportBtn.addEventListener("click", () => {
+      els.codeBox.value = encodeBlueprint(playerBlueprint);
+      navigator.clipboard?.writeText(els.codeBox.value);
+    });
 
-function renderEditors() {
-  els.teamName.value = team.name;
-  els.unitEditors.innerHTML = "";
-  team.units.forEach((bot, index) => {
-    const card = document.createElement("article");
-    card.className = "unit-card";
-    card.innerHTML = `
-      <h2>Unit ${index + 1}</h2>
-      <div class="unit-row">
-        <label>Name<input data-unit="${index}" data-field="name" type="text" value="${escapeHtml(bot.name)}" maxlength="16"></label>
-        <label>Body<select data-unit="${index}" data-field="body">${optionTags("body", bot.body)}</select></label>
-        <label>Weapon<select data-unit="${index}" data-field="weapon">${optionTags("weapon", bot.weapon)}</select></label>
-        <label>Module<select data-unit="${index}" data-field="module">${optionTags("module", bot.module)}</select></label>
-        <label>Place<select data-unit="${index}" data-field="place">${optionTags("place", bot.place)}</select></label>
-      </div>
-      <div class="rules">
-        ${bot.rules.map((rule, ruleIndex) => `
-          <div class="rule-row">
-            <label>When<select data-unit="${index}" data-rule="${ruleIndex}" data-kind="when">${conditionOptions(rule.when)}</select></label>
-            <label>Then<select data-unit="${index}" data-rule="${ruleIndex}" data-kind="then">${actionOptions(rule.then)}</select></label>
-          </div>
-        `).join("")}
-      </div>
-    `;
-    els.unitEditors.append(card);
-  });
-}
+    els.importBtn.addEventListener("click", () => {
+      try {
+        playerBlueprint = decodeBlueprint(els.codeBox.value);
+        selectedSlot = "front";
+        renderBodyMap();
+        renderPresets();
+        resetBattle();
+      } catch (error) {
+        els.battleState.textContent = "BAD CODE";
+      }
+    });
 
-function conditionOptions(selected) {
-  return Object.entries(OPTIONS.when)
-    .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
-    .join("");
-}
-
-function actionOptions(selected) {
-  return Object.entries(OPTIONS.then)
-    .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
-    .join("");
-}
-
-function escapeHtml(text) {
-  return String(text).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#039;"
-  }[char]));
-}
-
-function teamToDsl(data) {
-  const lines = [`bot "${data.name}" v${data.version || 1}`, ""];
-  data.units.forEach((bot, index) => {
-    lines.push(`unit ${index + 1} "${bot.name}"`);
-    lines.push(`body ${bot.body}`);
-    lines.push(`weapon ${bot.weapon}`);
-    lines.push(`module ${bot.module}`);
-    lines.push(`place ${bot.place}`);
-    bot.rules.forEach((rule) => lines.push(`rule ${rule.when} -> ${rule.then}`));
-    lines.push("");
-  });
-  return lines.join("\n").trim();
-}
-
-function dslToTeam(source) {
-  const trimmed = source.trim();
-  if (!trimmed) throw new Error("BOTコードが空です");
-  if (trimmed.startsWith("{")) return sanitizeTeam(JSON.parse(trimmed));
-  if (trimmed.startsWith("PB1.")) return decodeShare(trimmed);
-
-  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const header = lines.shift();
-  const nameMatch = header.match(/^bot\s+"([^"]+)"\s+v(\d+)$/i);
-  if (!nameMatch) throw new Error("1行目は bot \"Name\" v1 の形式にしてください");
-
-  const parsed = { version: Number(nameMatch[2]), name: nameMatch[1], units: [] };
-  let current = null;
-  for (const line of lines) {
-    const unitMatch = line.match(/^unit\s+\d+\s+"([^"]+)"$/i);
-    if (unitMatch) {
-      current = { name: unitMatch[1], body: "medium", weapon: "pulse", module: "dash", place: "mid", rules: [] };
-      parsed.units.push(current);
-      continue;
-    }
-    if (!current) throw new Error("unit定義の前に項目があります");
-    const pair = line.match(/^(body|weapon|module|place)\s+([a-z.0-9_-]+)$/i);
-    if (pair) {
-      current[pair[1]] = pair[2];
-      continue;
-    }
-    const rule = line.match(/^rule\s+(.+?)\s*->\s*([a-z.]+)$/i);
-    if (rule) {
-      current.rules.push({ when: rule[1], then: rule[2] });
-      continue;
-    }
-    throw new Error(`読めない行があります: ${line}`);
+    els.codeBox.value = encodeBlueprint(playerBlueprint);
   }
-  return sanitizeTeam(parsed);
-}
 
-function sanitizeTeam(data) {
-  const clean = {
-    version: 1,
-    name: String(data.name || "Nameless").slice(0, 24),
-    units: []
-  };
-  const units = Array.isArray(data.units) ? data.units.slice(0, 3) : [];
-  while (units.length < 3) units.push(clone(DEFAULT_TEAM.units[units.length]));
-  clean.units = units.map((bot, index) => ({
-    name: String(bot.name || `Unit ${index + 1}`).slice(0, 16),
-    body: valid("body", bot.body, "medium"),
-    weapon: valid("weapon", bot.weapon, "pulse"),
-    module: valid("module", bot.module, "dash"),
-    place: valid("place", bot.place, "mid"),
-    rules: sanitizeRules(bot.rules)
-  }));
-  return clean;
-}
+  function renderBodyMap() {
+    els.botName.textContent = playerBlueprint.name;
+    els.bodyMap.innerHTML = '<div class="body-core">CORE</div>';
+    slotDefs.forEach((slot) => {
+      const partId = playerBlueprint.slots[slot.id] || "empty";
+      const part = parts[partId];
+      const button = document.createElement("button");
+      const x = 50 + Math.sin(slot.angle) * 42;
+      const y = 50 - Math.cos(slot.angle) * 42;
+      button.type = "button";
+      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""}`;
+      button.dataset.slot = slot.id;
+      button.title = `${slot.label} ${part.name}`;
+      button.style.left = `${x}%`;
+      button.style.top = `${y}%`;
+      button.style.color = part.color;
+      button.textContent = part.mark;
+      els.bodyMap.append(button);
+    });
+  }
 
-function sanitizeRules(rules) {
-  const list = Array.isArray(rules) ? rules.slice(0, 3) : [];
-  while (list.length < 3) list.push({ when: "always", then: "attack.nearest" });
-  return list.map((rule) => ({
-    when: hasKey(OPTIONS.when, rule.when) ? rule.when : "always",
-    then: hasKey(OPTIONS.then, rule.then) ? rule.then : "attack.nearest"
-  }));
-}
+  function renderPalette() {
+    els.palette.innerHTML = "";
+    Object.entries(parts).forEach(([id, part]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "part-button";
+      button.dataset.part = id;
+      button.title = part.name;
+      button.style.color = part.color;
+      button.textContent = part.mark;
+      els.palette.append(button);
+    });
+  }
 
-function valid(group, value, fallback) {
-  return hasKey(OPTIONS[group], value) ? value : fallback;
-}
+  function renderPresets() {
+    els.presets.innerHTML = "";
+    playerPresets.forEach((preset, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.preset = String(index);
+      button.textContent = preset.name.toUpperCase();
+      if (preset.name === playerBlueprint.name) button.classList.add("active");
+      els.presets.append(button);
+    });
+  }
 
-function hasKey(object, key) {
-  return Object.prototype.hasOwnProperty.call(object, key);
-}
+  function makeArena() {
+    const group = new THREE.Group();
+    const floor = new THREE.Mesh(
+      new THREE.CylinderGeometry(5.7, 5.7, 0.18, 96),
+      new THREE.MeshStandardMaterial({ color: 0x1c2325, metalness: 0.15, roughness: 0.72 })
+    );
+    floor.receiveShadow = true;
+    floor.position.y = -0.72;
+    group.add(floor);
 
-function encodeShare(data) {
-  return `PB1.${btoa(unescape(encodeURIComponent(JSON.stringify(sanitizeTeam(data)))))}`;
-}
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(5.75, 0.045, 12, 120),
+      new THREE.MeshStandardMaterial({ color: 0xffb84e, emissive: 0x4c2c08, roughness: 0.45 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = -0.58;
+    group.add(ring);
 
-function decodeShare(code) {
-  return sanitizeTeam(JSON.parse(decodeURIComponent(escape(atob(code.trim().replace(/^PB1\./, ""))))));
-}
+    const grid = new THREE.GridHelper(11, 22, 0x35545b, 0x263033);
+    grid.position.y = -0.61;
+    group.add(grid);
 
-function startBattle() {
-  team = sanitizeTeam(team);
-  enemyTeam = sanitizeTeam(enemyTeam);
-  sim = createSim(team, enemyTeam);
-  lastFrame = performance.now();
-  els.status.textContent = `${team.name} vs ${enemyTeam.name}`;
-  requestAnimationFrame(tick);
-}
+    for (let i = 0; i < 16; i += 1) {
+      const angle = (Math.PI * 2 * i) / 16;
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.6, 0.06),
+        new THREE.MeshStandardMaterial({ color: 0x435157, emissive: 0x10191c })
+      );
+      post.position.set(Math.cos(angle) * 5.72, -0.34, Math.sin(angle) * 5.72);
+      post.rotation.y = -angle;
+      group.add(post);
+    }
 
-function createSim(left, right) {
-  return {
-    time: 0,
-    ended: false,
-    winner: null,
-    bullets: [],
-    cores: [
-      { side: 0, x: 70, y: 270, hp: 360, maxHp: 360 },
-      { side: 1, x: 890, y: 270, hp: 360, maxHp: 360 }
-    ],
-    bots: [
-      ...makeBots(left, 0),
-      ...makeBots(right, 1)
-    ]
-  };
-}
+    return group;
+  }
 
-function makeBots(data, side) {
-  const ySlots = [170, 270, 370];
-  return data.units.map((bot, index) => {
-    const placeOffset = { front: 170, mid: 120, back: 80 }[bot.place];
-    const x = side === 0 ? placeOffset : 960 - placeOffset;
-    const body = OPTIONS.body[bot.body];
-    return {
-      id: `${side}-${index}`,
-      side,
-      name: bot.name,
-      x,
-      y: ySlots[index],
-      vx: 0,
-      hp: body.hp,
-      maxHp: body.hp,
-      cool: 8 + index * 8,
-      shield: 0,
-      slow: 0,
-      def: bot
+  function resetBattle() {
+    running = false;
+    battleTime = 0;
+    clearProjectiles();
+    if (playerBot) scene.remove(playerBot.group);
+    if (enemyBot) scene.remove(enemyBot.group);
+    playerBot = createBot(playerBlueprint, 0);
+    enemyBot = createBot(enemyBlueprint, 1);
+    scene.add(playerBot.group, enemyBot.group);
+    updateHud();
+    els.battleState.textContent = "READY";
+  }
+
+  function createBot(blueprint, team) {
+    const stats = calcStats(blueprint);
+    const bot = {
+      team,
+      blueprint: clone(blueprint),
+      stats,
+      hp: stats.maxHp,
+      pos: new THREE.Vector2(team === 0 ? -2.15 : 2.15, team === 0 ? -0.35 : 0.35),
+      vel: new THREE.Vector2(0, 0),
+      yaw: team === 0 ? 0 : Math.PI,
+      omega: 0,
+      cooldowns: {},
+      active: new Set(),
+      group: new THREE.Group(),
+      core: null,
+      partGroups: {}
     };
-  });
-}
-
-function tick(now) {
-  if (!sim) return;
-  const dt = Math.min(32, now - lastFrame) / 16.6667;
-  lastFrame = now;
-  if (!sim.ended) updateSim(dt);
-  drawSim();
-  els.timer.textContent = `${(sim.time / 60).toFixed(1)}s`;
-  if (!sim.ended) requestAnimationFrame(tick);
-}
-
-function updateSim(dt) {
-  sim.time += dt;
-  for (const bot of sim.bots) {
-    if (bot.hp <= 0) continue;
-    bot.cool = Math.max(0, bot.cool - dt);
-    bot.shield = Math.max(0, bot.shield - dt);
-    bot.slow = Math.max(0, bot.slow - dt);
-    const action = chooseAction(bot);
-    act(bot, action, dt);
-    bot.x = clamp(bot.x + bot.vx * dt, 45, 915);
+    bot.group.userData.bot = bot;
+    buildBotMesh(bot);
+    syncBotMesh(bot, 0);
+    return bot;
   }
 
-  for (const bullet of sim.bullets) {
-    bullet.x += bullet.vx * dt;
-    bullet.life -= dt;
-    const targets = sim.bots.filter((bot) => bot.side !== bullet.side && bot.hp > 0);
-    const hit = targets.find((bot) => dist(bot, bullet) < 18);
-    if (hit) {
-      damage(hit, bullet.damage);
-      if (bullet.slow) hit.slow = bullet.slow;
-      bullet.life = 0;
+  function calcStats(blueprint) {
+    let mass = 1.25;
+    let armor = 1;
+    let maxHp = 150;
+    slotDefs.forEach((slot) => {
+      const partId = blueprint.slots[slot.id] || "empty";
+      mass += parts[partId].mass;
+      if (partId === "shield") maxHp += 13;
+      if (partId === "weight") {
+        maxHp += 8;
+        armor += 0.04;
+      }
+    });
+    return { mass, inertia: mass * 0.92, maxHp, armor };
+  }
+
+  function buildBotMesh(bot) {
+    const teamColor = bot.team === 0 ? 0x55d8f0 : 0xff6461;
+    const coreMaterial = new THREE.MeshStandardMaterial({
+      color: teamColor,
+      metalness: 0.2,
+      roughness: 0.45,
+      emissive: bot.team === 0 ? 0x10343d : 0x3d1010
+    });
+    bot.core = new THREE.Mesh(new THREE.SphereGeometry(0.72, 40, 24), coreMaterial);
+    bot.core.castShadow = true;
+    bot.core.receiveShadow = true;
+    bot.group.add(bot.core);
+
+    const seam = new THREE.Mesh(
+      new THREE.TorusGeometry(0.73, 0.012, 8, 80),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.42 })
+    );
+    seam.rotation.x = Math.PI / 2;
+    bot.group.add(seam);
+
+    slotDefs.forEach((slot) => {
+      const partId = bot.blueprint.slots[slot.id] || "empty";
+      if (partId === "empty") return;
+      const partGroup = createPartGroup(partId, slot.angle);
+      bot.partGroups[slot.id] = partGroup;
+      bot.group.add(partGroup);
+    });
+  }
+
+  function createPartGroup(partId, angle) {
+    const part = parts[partId];
+    const group = new THREE.Group();
+    group.userData.partId = partId;
+    const normal = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    group.position.copy(normal.clone().multiplyScalar(0.72));
+
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(part.color),
+      roughness: 0.45,
+      metalness: 0.22,
+      emissive: new THREE.Color(part.color).multiplyScalar(0.18)
+    });
+
+    if (partId === "eye") {
+      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.18, 18, 12), material);
+      lens.position.copy(normal.clone().multiplyScalar(0.16));
+      lens.castShadow = true;
+      group.add(lens);
     }
-    const core = sim.cores[1 - bullet.side];
-    if (Math.abs(bullet.x - core.x) < 24 && Math.abs(bullet.y - core.y) < 80) {
-      core.hp -= bullet.damage;
-      bullet.life = 0;
+
+    if (partId === "jet") {
+      const nozzle = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.46, 18), material);
+      alignY(nozzle, normal.clone().negate());
+      nozzle.position.copy(normal.clone().multiplyScalar(0.08));
+      nozzle.castShadow = true;
+      group.add(nozzle);
+
+      const flame = new THREE.Mesh(
+        new THREE.ConeGeometry(0.15, 0.54, 16),
+        new THREE.MeshStandardMaterial({ color: 0xfff2a0, emissive: 0xff7a1a, transparent: true, opacity: 0.82 })
+      );
+      alignY(flame, normal);
+      flame.position.copy(normal.clone().multiplyScalar(0.42));
+      flame.visible = false;
+      flame.userData.flame = true;
+      group.add(flame);
+    }
+
+    if (partId === "spike") {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.64, 22), material);
+      alignY(spike, normal);
+      spike.position.copy(normal.clone().multiplyScalar(0.28));
+      spike.castShadow = true;
+      group.add(spike);
+    }
+
+    if (partId === "cannon") {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.72, 18), material);
+      alignY(barrel, normal);
+      barrel.position.copy(normal.clone().multiplyScalar(0.28));
+      barrel.castShadow = true;
+      group.add(barrel);
+    }
+
+    if (partId === "shield") {
+      const shield = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.48, 0.68), material);
+      alignX(shield, normal);
+      shield.position.copy(normal.clone().multiplyScalar(0.22));
+      shield.castShadow = true;
+      group.add(shield);
+    }
+
+    if (partId === "weight") {
+      const weight = new THREE.Mesh(new THREE.OctahedronGeometry(0.25), material);
+      weight.position.copy(normal.clone().multiplyScalar(0.16));
+      weight.castShadow = true;
+      group.add(weight);
+    }
+
+    return group;
+  }
+
+  function alignY(mesh, direction) {
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  }
+
+  function alignX(mesh, direction) {
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction.normalize());
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
+    lastTick = now;
+    idleSpin += dt;
+
+    if (running) updateBattle(dt);
+    else {
+      playerBot.yaw += dt * 0.18;
+      enemyBot.yaw -= dt * 0.18;
+    }
+
+    syncBotMesh(playerBot, dt);
+    syncBotMesh(enemyBot, dt);
+    updateProjectilesVisuals();
+    updateCamera(dt);
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+
+  function updateBattle(dt) {
+    battleTime += dt;
+    playerBot.active.clear();
+    enemyBot.active.clear();
+    updateBot(playerBot, enemyBot, dt);
+    updateBot(enemyBot, playerBot, dt);
+    integrateBot(playerBot, dt);
+    integrateBot(enemyBot, dt);
+    updateProjectiles(dt);
+    handleBotCollision(dt);
+    updateHud();
+
+    if (playerBot.hp <= 0 || enemyBot.hp <= 0 || battleTime >= 45) {
+      running = false;
+      const p = Math.max(0, playerBot.hp);
+      const e = Math.max(0, enemyBot.hp);
+      els.battleState.textContent = p === e ? "DRAW" : p > e ? "WIN" : "LOSE";
     }
   }
-  sim.bullets = sim.bullets.filter((bullet) => bullet.life > 0 && bullet.x > -40 && bullet.x < 1000);
 
-  const leftDead = sim.cores[0].hp <= 0 || sim.bots.filter((bot) => bot.side === 0 && bot.hp > 0).length === 0;
-  const rightDead = sim.cores[1].hp <= 0 || sim.bots.filter((bot) => bot.side === 1 && bot.hp > 0).length === 0;
-  if (leftDead || rightDead || sim.time >= 3600) {
-    endBattle(leftDead, rightDead);
+  function updateBot(bot, opponent, dt) {
+    slotDefs.forEach((slot) => {
+      bot.cooldowns[slot.id] = Math.max(0, (bot.cooldowns[slot.id] || 0) - dt);
+    });
+
+    const toEnemy = angleTo(bot.pos, opponent.pos);
+    const distance = bot.pos.distanceTo(opponent.pos);
+    const eyeCount = countPart(bot.blueprint, "eye");
+
+    slotDefs.forEach((slot) => {
+      const partId = bot.blueprint.slots[slot.id];
+      const mountAngle = bot.yaw + slot.angle;
+      const aimDiff = wrapAngle(toEnemy - mountAngle);
+
+      if (partId === "eye") {
+        bot.omega += aimDiff * 4.2 * dt / bot.stats.inertia;
+        if (Math.abs(aimDiff) < 0.42) bot.active.add(slot.id);
+      }
+
+      if (partId === "jet") {
+        const pulse = 0.85 + Math.sin(battleTime * 7.5 + slot.angle * 2) * 0.16;
+        const forceAngle = mountAngle + Math.PI;
+        applyForce(bot, forceAngle, 3.2 * pulse, mountAngle, dt);
+        bot.active.add(slot.id);
+      }
+
+      if (partId === "shield" && Math.abs(aimDiff) < 0.9) {
+        bot.active.add(slot.id);
+      }
+
+      if (partId === "cannon") {
+        const cone = eyeCount > 0 ? 0.4 : 0.28;
+        if (distance < 6.0 && Math.abs(aimDiff) < cone && bot.cooldowns[slot.id] <= 0) {
+          fireProjectile(bot, slot, mountAngle);
+          bot.cooldowns[slot.id] = 1.05;
+          bot.active.add(slot.id);
+        }
+      }
+    });
+
+    if (eyeCount === 0) {
+      bot.omega += wrapAngle(toEnemy - bot.yaw) * 0.22 * dt;
+    }
   }
-}
 
-function chooseAction(bot) {
-  const context = getContext(bot);
-  for (const rule of bot.def.rules) {
-    if (testCondition(rule.when, context)) return rule.then;
+  function applyForce(bot, forceAngle, power, mountAngle, dt) {
+    const force = vectorFromAngle(forceAngle).multiplyScalar(power);
+    bot.vel.add(force.clone().multiplyScalar(dt / bot.stats.mass));
+    const r = vectorFromAngle(mountAngle).multiplyScalar(0.72);
+    const torque = r.x * force.y - r.y * force.x;
+    bot.omega += (torque * dt) / bot.stats.inertia;
   }
-  return "attack.nearest";
-}
 
-function getContext(bot) {
-  const enemies = sim.bots.filter((other) => other.side !== bot.side && other.hp > 0);
-  const allies = sim.bots.filter((other) => other.side === bot.side && other.hp > 0);
-  const nearest = enemies.slice().sort((a, b) => dist(a, bot) - dist(b, bot))[0];
-  const enemyCore = sim.cores[1 - bot.side];
-  return {
-    nearest,
-    enemyDistance: nearest ? dist(nearest, bot) : Math.abs(enemyCore.x - bot.x),
-    hpPct: (bot.hp / bot.maxHp) * 100,
-    allyHurt: allies.some((ally) => (ally.hp / ally.maxHp) * 100 < 50),
-    coreVisible: Math.abs(enemyCore.x - bot.x) < 330
-  };
-}
+  function integrateBot(bot, dt) {
+    bot.pos.add(bot.vel.clone().multiplyScalar(dt));
+    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
+    bot.vel.multiplyScalar(Math.exp(-1.15 * dt));
+    bot.omega *= Math.exp(-1.85 * dt);
 
-function testCondition(condition, c) {
-  if (condition === "always") return true;
-  if (condition === "enemy.core.visible") return c.coreVisible;
-  if (condition === "hp < 40") return c.hpPct < 40;
-  if (condition === "enemy.distance > 160") return c.enemyDistance > 160;
-  if (condition === "enemy.distance < 70") return c.enemyDistance < 70;
-  if (condition === "ally.hp < 50") return c.allyHurt;
-  return false;
-}
+    const limit = 4.85;
+    const radius = bot.pos.length();
+    if (radius > limit) {
+      const normal = bot.pos.clone().normalize();
+      bot.pos.copy(normal.multiplyScalar(limit));
+      const outward = bot.vel.dot(normal);
+      if (outward > 0) bot.vel.add(normal.multiplyScalar(-outward * 1.55));
+      bot.omega += (bot.team === 0 ? -1 : 1) * 0.2;
+      bot.hp -= 1.5 * dt;
+    }
 
-function act(bot, action, dt) {
-  const dir = bot.side === 0 ? 1 : -1;
-  const body = OPTIONS.body[bot.def.body];
-  const speed = body.speed * (bot.slow > 0 ? 0.48 : 1);
-  bot.vx *= 0.75;
-
-  if (action === "move.forward") bot.vx = speed * dir;
-  if (action === "kite") bot.vx = -speed * dir;
-  if (action === "shield" && bot.def.module === "shield") bot.shield = 26;
-  if (action === "repair" && bot.def.module === "repair") bot.hp = Math.min(bot.maxHp, bot.hp + 0.18 * dt);
-  if (action === "cover.ally") bot.vx = speed * 0.45 * dir;
-  if (action.startsWith("attack")) fire(bot, action);
-}
-
-function fire(bot, action) {
-  const weapon = OPTIONS.weapon[bot.def.weapon];
-  if (bot.cool > 0) return;
-  const target = action === "attack.core"
-    ? sim.cores[1 - bot.side]
-    : nearestEnemy(bot);
-  if (!target) return;
-  const distance = Math.abs(target.x - bot.x);
-  if (distance > weapon.range) {
-    bot.vx = OPTIONS.body[bot.def.body].speed * (bot.side === 0 ? 1 : -1);
-    return;
+    if (bot.vel.length() > 5.2) bot.vel.setLength(5.2);
+    bot.hp = Math.max(0, bot.hp);
   }
-  bot.cool = weapon.cooldown;
-  if (bot.def.weapon === "drill") {
-    if (target.hp !== undefined) target.hp -= weapon.damage;
-    else target.hp -= weapon.damage;
-    return;
+
+  function fireProjectile(bot, slot, mountAngle) {
+    const normal = vectorFromAngle(mountAngle);
+    const pos = bot.pos.clone().add(normal.clone().multiplyScalar(0.95));
+    const vel = normal.clone().multiplyScalar(6.2).add(bot.vel.clone().multiplyScalar(0.45));
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 12, 8),
+      new THREE.MeshStandardMaterial({
+        color: bot.team === 0 ? 0x55d8f0 : 0xff6461,
+        emissive: bot.team === 0 ? 0x1bc7ee : 0xff2525
+      })
+    );
+    mesh.castShadow = true;
+    scene.add(mesh);
+    projectiles.push({ team: bot.team, pos, vel, life: 1.35, damage: 13, mesh });
   }
-  const dir = bot.side === 0 ? 1 : -1;
-  sim.bullets.push({
-    side: bot.side,
-    x: bot.x + dir * 18,
-    y: bot.y,
-    vx: dir * (bot.def.weapon === "missile" ? 5.1 : 8.3),
-    damage: weapon.damage,
-    slow: weapon.slow || 0,
-    color: weapon.color,
-    life: 100
-  });
-}
 
-function nearestEnemy(bot) {
-  return sim.bots
-    .filter((other) => other.side !== bot.side && other.hp > 0)
-    .sort((a, b) => dist(a, bot) - dist(b, bot))[0] || sim.cores[1 - bot.side];
-}
+  function updateProjectiles(dt) {
+    projectiles.forEach((shot) => {
+      shot.pos.add(shot.vel.clone().multiplyScalar(dt));
+      shot.life -= dt;
+      const targetBot = shot.team === 0 ? enemyBot : playerBot;
+      if (shot.pos.distanceTo(targetBot.pos) < 0.76 && targetBot.hp > 0) {
+        damageBot(targetBot, shot.damage, angleTo(targetBot.pos, shot.pos));
+        shot.life = 0;
+      }
+      if (shot.pos.length() > 5.7) shot.life = 0;
+    });
 
-function damage(bot, amount) {
-  const body = OPTIONS.body[bot.def.body];
-  const blocked = bot.shield > 0 ? 0.45 : 1;
-  bot.hp -= amount * blocked / body.armor;
-}
-
-function endBattle(leftDead, rightDead) {
-  sim.ended = true;
-  let result = "Draw";
-  if (leftDead && !rightDead) result = `${enemyTeam.name} wins`;
-  if (rightDead && !leftDead) result = `${team.name} wins`;
-  if (!leftDead && !rightDead) {
-    const leftScore = sim.cores[0].hp + sim.bots.filter((bot) => bot.side === 0).reduce((sum, bot) => sum + Math.max(0, bot.hp), 0);
-    const rightScore = sim.cores[1].hp + sim.bots.filter((bot) => bot.side === 1).reduce((sum, bot) => sum + Math.max(0, bot.hp), 0);
-    result = leftScore === rightScore ? "Draw" : leftScore > rightScore ? `${team.name} wins` : `${enemyTeam.name} wins`;
+    projectiles = projectiles.filter((shot) => {
+      if (shot.life > 0) return true;
+      scene.remove(shot.mesh);
+      shot.mesh.geometry.dispose();
+      shot.mesh.material.dispose();
+      return false;
+    });
   }
-  els.status.textContent = result;
-}
 
-function drawSim() {
-  ctx.clearRect(0, 0, 960, 540);
-  ctx.fillStyle = "#111416";
-  ctx.fillRect(0, 0, 960, 540);
-  ctx.strokeStyle = "#263035";
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= 960; x += 80) {
-    ctx.beginPath();
-    ctx.moveTo(x, 70);
-    ctx.lineTo(x, 470);
-    ctx.stroke();
+  function handleBotCollision(dt) {
+    const delta = enemyBot.pos.clone().sub(playerBot.pos);
+    const distance = Math.max(delta.length(), 0.0001);
+    if (distance >= 1.46) return;
+
+    const normal = delta.multiplyScalar(1 / distance);
+    const overlap = 1.46 - distance;
+    playerBot.pos.add(normal.clone().multiplyScalar(-overlap * 0.5));
+    enemyBot.pos.add(normal.clone().multiplyScalar(overlap * 0.5));
+
+    const rel = playerBot.vel.clone().sub(enemyBot.vel);
+    const impact = Math.max(0.8, Math.abs(rel.dot(normal)) + 0.4);
+    playerBot.vel.add(normal.clone().multiplyScalar(-impact * 0.7));
+    enemyBot.vel.add(normal.clone().multiplyScalar(impact * 0.7));
+
+    contactDamage(playerBot, enemyBot, normal, dt);
+    contactDamage(enemyBot, playerBot, normal.clone().multiplyScalar(-1), dt);
   }
-  ctx.fillStyle = "#1d2326";
-  ctx.fillRect(0, 470, 960, 70);
-  drawCore(sim.cores[0], "#56c7d9");
-  drawCore(sim.cores[1], "#f05f57");
-  sim.bots.forEach(drawBot);
-  sim.bullets.forEach(drawBullet);
-}
 
-function drawCore(core, color) {
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.18;
-  ctx.fillRect(core.x - 28, core.y - 90, 56, 180);
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = color;
-  ctx.fillRect(core.x - 18, core.y - 66, 36, 132);
-  hpBar(core.x - 42, core.y - 104, 84, 8, core.hp / core.maxHp, color);
-}
-
-function drawBot(bot) {
-  if (bot.hp <= 0) {
-    ctx.fillStyle = "#394147";
-    ctx.fillRect(bot.x - 12, bot.y - 5, 24, 10);
-    return;
+  function contactDamage(attacker, defender, directionToDefender, dt) {
+    const hitAngle = Math.atan2(directionToDefender.y, directionToDefender.x);
+    let damage = 2.2 * dt;
+    slotDefs.forEach((slot) => {
+      const partId = attacker.blueprint.slots[slot.id];
+      const diff = Math.abs(wrapAngle(hitAngle - (attacker.yaw + slot.angle)));
+      if (partId === "spike" && diff < 0.72) {
+        damage += 24 * dt;
+        attacker.active.add(slot.id);
+      }
+      if (partId === "weight" && diff < 0.95) {
+        damage += 7 * dt;
+        attacker.active.add(slot.id);
+      }
+    });
+    damageBot(defender, damage, hitAngle + Math.PI);
   }
-  const color = bot.side === 0 ? "#56c7d9" : "#f05f57";
-  ctx.fillStyle = color;
-  roundedRect(ctx, bot.x - 17, bot.y - 17, 34, 34, 7);
-  ctx.fillStyle = "#101112";
-  ctx.fillRect(bot.x - 5, bot.y - 6, 10, 12);
-  if (bot.shield > 0) {
-    ctx.strokeStyle = "#f0b94d";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(bot.x, bot.y, 27, 0, Math.PI * 2);
-    ctx.stroke();
+
+  function damageBot(bot, amount, sourceAngle) {
+    let multiplier = 1 / bot.stats.armor;
+    slotDefs.forEach((slot) => {
+      const partId = bot.blueprint.slots[slot.id];
+      if (partId !== "shield") return;
+      const diff = Math.abs(wrapAngle(sourceAngle - (bot.yaw + slot.angle)));
+      if (diff < 0.82) {
+        multiplier *= 0.38;
+        bot.active.add(slot.id);
+      }
+    });
+    bot.hp -= amount * multiplier;
   }
-  hpBar(bot.x - 22, bot.y - 29, 44, 5, bot.hp / bot.maxHp, color);
-}
 
-function drawBullet(bullet) {
-  ctx.fillStyle = bullet.color;
-  ctx.beginPath();
-  ctx.arc(bullet.x, bullet.y, bullet.damage > 10 ? 6 : 4, 0, Math.PI * 2);
-  ctx.fill();
-}
+  function syncBotMesh(bot, dt) {
+    bot.group.position.set(bot.pos.x, 0, bot.pos.y);
+    bot.group.rotation.y = -bot.yaw;
+    bot.core.rotation.x += bot.vel.y * dt * 1.6;
+    bot.core.rotation.z -= bot.vel.x * dt * 1.6;
+    Object.entries(bot.partGroups).forEach(([slotId, group]) => {
+      const active = bot.active.has(slotId);
+      const scale = active ? 1.12 + Math.sin(idleSpin * 18) * 0.04 : 1;
+      group.scale.setScalar(scale);
+      group.traverse((child) => {
+        if (child.userData.flame) child.visible = active;
+      });
+    });
+  }
 
-function hpBar(x, y, w, h, pct, color) {
-  ctx.fillStyle = "#0a0c0d";
-  ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w * clamp(pct, 0, 1), h);
-}
+  function updateProjectilesVisuals() {
+    projectiles.forEach((shot) => {
+      shot.mesh.position.set(shot.pos.x, -0.03, shot.pos.y);
+    });
+  }
 
-function roundedRect(context, x, y, w, h, r) {
-  context.beginPath();
-  context.moveTo(x + r, y);
-  context.lineTo(x + w - r, y);
-  context.quadraticCurveTo(x + w, y, x + w, y + r);
-  context.lineTo(x + w, y + h - r);
-  context.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  context.lineTo(x + r, y + h);
-  context.quadraticCurveTo(x, y + h, x, y + h - r);
-  context.lineTo(x, y + r);
-  context.quadraticCurveTo(x, y, x + r, y);
-  context.fill();
-}
+  function updateCamera(dt) {
+    const compact = window.innerWidth < 760;
+    const midpoint = playerBot.pos.clone().add(enemyBot.pos).multiplyScalar(0.5);
+    target.x += (midpoint.x * 0.25 - target.x) * Math.min(1, dt * 3.2);
+    target.z += (midpoint.y * 0.25 - target.z) * Math.min(1, dt * 3.2);
+    const distance = compact ? 9.8 : 8.5;
+    const height = compact ? 8.3 : 7.0;
+    camera.position.x += (target.x - camera.position.x) * Math.min(1, dt * 2);
+    camera.position.y += (height - camera.position.y) * Math.min(1, dt * 2);
+    camera.position.z += (distance + target.z - camera.position.z) * Math.min(1, dt * 2);
+    camera.lookAt(target.x, -0.15, target.z);
+  }
 
-function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+  function updateHud() {
+    els.playerHp.style.width = `${Math.max(0, (playerBot.hp / playerBot.stats.maxHp) * 100)}%`;
+    els.enemyHp.style.width = `${Math.max(0, (enemyBot.hp / enemyBot.stats.maxHp) * 100)}%`;
+    els.clock.textContent = battleTime.toFixed(1);
+  }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+  function clearProjectiles() {
+    projectiles.forEach((shot) => {
+      scene.remove(shot.mesh);
+      shot.mesh.geometry.dispose();
+      shot.mesh.material.dispose();
+    });
+    projectiles = [];
+  }
 
-function randomizeTeam() {
-  const bodies = Object.keys(OPTIONS.body);
-  const weapons = Object.keys(OPTIONS.weapon);
-  const modules = Object.keys(OPTIONS.module);
-  const places = Object.keys(OPTIONS.place);
-  const conditions = Object.keys(OPTIONS.when);
-  const actions = Object.keys(OPTIONS.then);
-  team.units = team.units.map((bot) => ({
-    ...bot,
-    body: pick(bodies),
-    weapon: pick(weapons),
-    module: pick(modules),
-    place: pick(places),
-    rules: [0, 1, 2].map(() => ({ when: pick(conditions), then: pick(actions) }))
-  }));
-  renderEditors();
-  drawIdle();
-}
+  function resize() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.fov = width < 760 ? 50 : 43;
+    camera.updateProjectionMatrix();
+  }
 
-function pick(list) {
-  return list[Math.floor(Math.random() * list.length)];
-}
+  function countPart(blueprint, partId) {
+    return slotDefs.reduce((sum, slot) => sum + (blueprint.slots[slot.id] === partId ? 1 : 0), 0);
+  }
 
-function drawIdle() {
-  sim = createSim(team, enemyTeam);
-  drawSim();
-}
+  function encodeBlueprint(blueprint) {
+    const payload = JSON.stringify(sanitizeBlueprint(blueprint));
+    return `KB1.${btoa(unescape(encodeURIComponent(payload)))}`;
+  }
 
-document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
-    document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
-    button.classList.add("active");
-    document.querySelector(`#${button.dataset.tab}Tab`).classList.add("active");
-  });
+  function decodeBlueprint(source) {
+    const text = source.trim();
+    if (!text) throw new Error("empty");
+    if (text.startsWith("KB1.")) {
+      return sanitizeBlueprint(JSON.parse(decodeURIComponent(escape(atob(text.slice(4))))));
+    }
+    return sanitizeBlueprint(JSON.parse(text));
+  }
+
+  function sanitizeBlueprint(value) {
+    const clean = makeBlueprint(String(value.name || "Custom Core").slice(0, 18), {});
+    slotDefs.forEach((slot) => {
+      const partId = value.slots && parts[value.slots[slot.id]] ? value.slots[slot.id] : "empty";
+      clean.slots[slot.id] = partId;
+    });
+    return clean;
+  }
+
+  function vectorFromAngle(angle) {
+    return new THREE.Vector2(Math.cos(angle), Math.sin(angle));
+  }
+
+  function angleTo(from, to) {
+    return Math.atan2(to.y - from.y, to.x - from.x);
+  }
+
+  function wrapAngle(angle) {
+    let value = angle;
+    while (value > Math.PI) value -= Math.PI * 2;
+    while (value < -Math.PI) value += Math.PI * 2;
+    return value;
+  }
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+})().catch((error) => {
+  const target = document.querySelector("#scene") || document.body;
+  target.innerHTML = `<div style="padding:24px;color:#f4efe6;font-family:sans-serif">3D runtime failed: ${String(error.message || error)}</div>`;
 });
-
-els.teamName.addEventListener("input", () => {
-  team.name = els.teamName.value || "Nameless";
-});
-
-els.unitEditors.addEventListener("input", (event) => {
-  const target = event.target;
-  const index = Number(target.dataset.unit);
-  if (!Number.isFinite(index)) return;
-  if (target.dataset.field) team.units[index][target.dataset.field] = target.value;
-  if (target.dataset.rule) {
-    const ruleIndex = Number(target.dataset.rule);
-    team.units[index].rules[ruleIndex][target.dataset.kind] = target.value;
-  }
-  drawIdle();
-});
-
-document.querySelector("#randomize").addEventListener("click", randomizeTeam);
-document.querySelector("#exportDsl").addEventListener("click", () => {
-  els.botCode.value = teamToDsl(sanitizeTeam(team));
-});
-document.querySelector("#importDsl").addEventListener("click", () => {
-  try {
-    team = dslToTeam(els.botCode.value);
-    renderEditors();
-    drawIdle();
-    els.status.textContent = "BOTコードを読み込みました";
-  } catch (error) {
-    els.status.textContent = error.message;
-  }
-});
-document.querySelector("#copyShare").addEventListener("click", () => {
-  els.botCode.value = encodeShare(team);
-  navigator.clipboard?.writeText(els.botCode.value);
-  els.status.textContent = "Share Codeを生成しました";
-});
-document.querySelector("#loadSampleEnemy").addEventListener("click", () => {
-  enemyTeam = clone(SAMPLE_ENEMY);
-  els.enemyCode.value = teamToDsl(enemyTeam);
-  updateEnemyReadout();
-  drawIdle();
-});
-document.querySelector("#loadEnemyCode").addEventListener("click", () => {
-  try {
-    enemyTeam = dslToTeam(els.enemyCode.value);
-    updateEnemyReadout();
-    drawIdle();
-    els.status.textContent = "相手BOTを読み込みました";
-  } catch (error) {
-    els.status.textContent = error.message;
-  }
-});
-els.run.addEventListener("click", startBattle);
-
-function updateEnemyReadout() {
-  els.enemyName.textContent = enemyTeam.name;
-  const weapons = enemyTeam.units.map((bot) => OPTIONS.weapon[bot.weapon].label).join(" / ");
-  els.enemySummary.textContent = weapons;
-}
-
-renderEditors();
-els.botCode.value = teamToDsl(team);
-els.enemyCode.value = teamToDsl(enemyTeam);
-updateEnemyReadout();
-drawIdle();
