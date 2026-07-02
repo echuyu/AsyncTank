@@ -1,16 +1,31 @@
 (async function boot() {
   const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
 
+  const TAU = Math.PI * 2;
+  const ARENA_RADIUS = 5.18;
+  const RIM_RADIUS = 3.2;
+  const KO_RADIUS = 4.7;
+
   const slotDefs = [
-    ["front", 0, "F"],
-    ["frontRight", Math.PI / 4, "FR"],
-    ["right", Math.PI / 2, "R"],
-    ["backRight", (Math.PI * 3) / 4, "BR"],
-    ["back", Math.PI, "B"],
-    ["backLeft", (-Math.PI * 3) / 4, "BL"],
-    ["left", -Math.PI / 2, "L"],
-    ["frontLeft", -Math.PI / 4, "FL"]
-  ].map(([id, angle, label]) => ({ id, angle, label }));
+    ...Array.from({ length: 12 }, (_, index) => ({
+      id: `ring${index}`,
+      angle: (TAU * index) / 12,
+      label: `R${index + 1}`,
+      vertical: 0,
+      mapRadius: 42
+    })),
+    ...Array.from({ length: 6 }, (_, index) => ({
+      id: `cap${index}`,
+      angle: (TAU * index) / 6 + TAU / 12,
+      label: `C${index + 1}`,
+      vertical: 0.48,
+      mapRadius: 23
+    }))
+  ].map((slot) => ({
+    ...slot,
+    mapX: 50 + Math.sin(slot.angle) * slot.mapRadius,
+    mapY: 50 - Math.cos(slot.angle) * slot.mapRadius
+  }));
 
   const parts = {
     empty: { mark: "·", name: "EMPTY", color: "#687176", mass: 0 },
@@ -24,69 +39,87 @@
 
   const playerPresets = [
     makeBlueprint("Mono Core", {
-      front: "eye",
-      frontLeft: "cannon",
-      frontRight: "spike",
-      back: "jet",
-      left: "weight",
-      right: "shield"
+      ring0: "eye",
+      ring1: "spike",
+      ring11: "cannon",
+      ring3: "shield",
+      ring5: "jet",
+      ring6: "jet",
+      ring8: "weight",
+      cap0: "eye",
+      cap3: "weight"
     }),
     makeBlueprint("Needle", {
-      front: "spike",
-      frontLeft: "spike",
-      frontRight: "spike",
-      back: "jet",
-      backLeft: "jet",
-      backRight: "jet",
-      left: "eye"
+      ring0: "spike",
+      ring1: "spike",
+      ring11: "spike",
+      ring2: "eye",
+      ring5: "jet",
+      ring6: "jet",
+      ring7: "jet",
+      cap0: "spike",
+      cap2: "weight"
     }),
     makeBlueprint("Orbit", {
-      front: "eye",
-      left: "jet",
-      right: "cannon",
-      backLeft: "cannon",
-      backRight: "shield",
-      back: "weight"
+      ring0: "eye",
+      ring2: "jet",
+      ring3: "cannon",
+      ring5: "shield",
+      ring6: "weight",
+      ring8: "jet",
+      ring9: "cannon",
+      cap1: "eye",
+      cap4: "shield"
     }),
     makeBlueprint("Shell", {
-      front: "cannon",
-      frontLeft: "shield",
-      frontRight: "shield",
-      left: "shield",
-      right: "shield",
-      back: "jet",
-      backLeft: "weight",
-      backRight: "weight"
+      ring0: "cannon",
+      ring1: "shield",
+      ring2: "shield",
+      ring3: "shield",
+      ring5: "weight",
+      ring6: "jet",
+      ring8: "weight",
+      ring9: "shield",
+      ring10: "shield",
+      ring11: "shield",
+      cap0: "eye",
+      cap3: "weight"
     })
   ];
 
   const enemyPresets = [
     makeBlueprint("Red Ram", {
-      front: "eye",
-      frontLeft: "spike",
-      frontRight: "spike",
-      back: "jet",
-      backLeft: "jet",
-      backRight: "weight",
-      left: "shield"
+      ring0: "eye",
+      ring1: "spike",
+      ring11: "spike",
+      ring5: "jet",
+      ring6: "jet",
+      ring7: "weight",
+      ring9: "shield",
+      cap0: "spike"
     }),
     makeBlueprint("Sidewinder", {
-      left: "eye",
-      right: "cannon",
-      backRight: "jet",
-      frontRight: "jet",
-      front: "shield",
-      back: "weight"
+      ring2: "eye",
+      ring3: "cannon",
+      ring4: "jet",
+      ring8: "jet",
+      ring10: "shield",
+      ring6: "weight",
+      cap2: "cannon"
     }),
     makeBlueprint("Citadel", {
-      front: "cannon",
-      frontLeft: "shield",
-      frontRight: "shield",
-      left: "weight",
-      right: "weight",
-      backLeft: "shield",
-      backRight: "shield",
-      back: "eye"
+      ring0: "cannon",
+      ring1: "shield",
+      ring2: "weight",
+      ring3: "shield",
+      ring5: "shield",
+      ring6: "eye",
+      ring7: "shield",
+      ring9: "shield",
+      ring10: "weight",
+      ring11: "shield",
+      cap1: "shield",
+      cap4: "shield"
     })
   ];
 
@@ -110,7 +143,7 @@
 
   let playerBlueprint = clone(playerPresets[0]);
   let enemyBlueprint = clone(enemyPresets[0]);
-  let selectedSlot = "front";
+  let selectedSlot = "ring0";
   let playerBot;
   let enemyBot;
   let projectiles = [];
@@ -160,7 +193,7 @@
     slotDefs.forEach((slot) => {
       slots[slot.id] = slotMap[slot.id] || "empty";
     });
-    return { version: 2, name, slots };
+    return { version: 3, name, slots };
   }
 
   function initUi() {
@@ -194,7 +227,7 @@
       const button = event.target.closest("[data-preset]");
       if (!button) return;
       playerBlueprint = clone(playerPresets[Number(button.dataset.preset)]);
-      selectedSlot = "front";
+      selectedSlot = "ring0";
       els.codeBox.value = encodeBlueprint(playerBlueprint);
       renderBodyMap();
       renderPresets();
@@ -222,7 +255,7 @@
     els.importBtn.addEventListener("click", () => {
       try {
         playerBlueprint = decodeBlueprint(els.codeBox.value);
-        selectedSlot = "front";
+        selectedSlot = "ring0";
         renderBodyMap();
         renderPresets();
         resetBattle();
@@ -241,14 +274,12 @@
       const partId = playerBlueprint.slots[slot.id] || "empty";
       const part = parts[partId];
       const button = document.createElement("button");
-      const x = 50 + Math.sin(slot.angle) * 42;
-      const y = 50 - Math.cos(slot.angle) * 42;
       button.type = "button";
       button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""}`;
       button.dataset.slot = slot.id;
       button.title = `${slot.label} ${part.name}`;
-      button.style.left = `${x}%`;
-      button.style.top = `${y}%`;
+      button.style.left = `${slot.mapX}%`;
+      button.style.top = `${slot.mapY}%`;
       button.style.color = part.color;
       button.textContent = part.mark;
       els.bodyMap.append(button);
@@ -283,38 +314,76 @@
 
   function makeArena() {
     const group = new THREE.Group();
-    const floor = new THREE.Mesh(
-      new THREE.CylinderGeometry(5.7, 5.7, 0.18, 96),
-      new THREE.MeshStandardMaterial({ color: 0x1c2325, metalness: 0.15, roughness: 0.72 })
+    const bowl = new THREE.Mesh(
+      makeBowlGeometry(ARENA_RADIUS, 20, 144),
+      new THREE.MeshStandardMaterial({
+        color: 0x1a2326,
+        metalness: 0.16,
+        roughness: 0.68,
+        side: THREE.DoubleSide
+      })
     );
-    floor.receiveShadow = true;
-    floor.position.y = -0.72;
-    group.add(floor);
+    bowl.receiveShadow = true;
+    group.add(bowl);
 
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(5.75, 0.045, 12, 120),
-      new THREE.MeshStandardMaterial({ color: 0xffb84e, emissive: 0x4c2c08, roughness: 0.45 })
+      new THREE.TorusGeometry(ARENA_RADIUS, 0.055, 14, 144),
+      new THREE.MeshStandardMaterial({ color: 0xffd36b, emissive: 0x5a3107, roughness: 0.4 })
     );
     ring.rotation.x = Math.PI / 2;
-    ring.position.y = -0.58;
+    ring.position.y = bowlHeight(ARENA_RADIUS) + 0.03;
     group.add(ring);
 
-    const grid = new THREE.GridHelper(11, 22, 0x35545b, 0x263033);
-    grid.position.y = -0.61;
-    group.add(grid);
+    for (let r = 1; r <= 4; r += 1) {
+      const radius = (ARENA_RADIUS * r) / 5;
+      const guide = new THREE.Mesh(
+        new THREE.TorusGeometry(radius, 0.012, 8, 96),
+        new THREE.MeshStandardMaterial({ color: 0x35545b, emissive: 0x071215, roughness: 0.7 })
+      );
+      guide.rotation.x = Math.PI / 2;
+      guide.position.y = bowlHeight(radius) + 0.014;
+      group.add(guide);
+    }
 
-    for (let i = 0; i < 16; i += 1) {
-      const angle = (Math.PI * 2 * i) / 16;
+    for (let i = 0; i < 24; i += 1) {
+      const angle = (Math.PI * 2 * i) / 24;
       const post = new THREE.Mesh(
-        new THREE.BoxGeometry(0.06, 0.6, 0.06),
+        new THREE.BoxGeometry(0.055, 0.72, 0.055),
         new THREE.MeshStandardMaterial({ color: 0x435157, emissive: 0x10191c })
       );
-      post.position.set(Math.cos(angle) * 5.72, -0.34, Math.sin(angle) * 5.72);
+      post.position.set(Math.cos(angle) * ARENA_RADIUS, bowlHeight(ARENA_RADIUS) + 0.35, Math.sin(angle) * ARENA_RADIUS);
       post.rotation.y = -angle;
       group.add(post);
     }
 
     return group;
+  }
+
+  function makeBowlGeometry(radius, rings, segments) {
+    const vertices = [];
+    const indices = [];
+    for (let r = 0; r <= rings; r += 1) {
+      const ringRadius = (radius * r) / rings;
+      const y = bowlHeight(ringRadius);
+      for (let s = 0; s < segments; s += 1) {
+        const angle = (TAU * s) / segments;
+        vertices.push(Math.cos(angle) * ringRadius, y, Math.sin(angle) * ringRadius);
+      }
+    }
+    for (let r = 0; r < rings; r += 1) {
+      for (let s = 0; s < segments; s += 1) {
+        const a = r * segments + s;
+        const b = r * segments + ((s + 1) % segments);
+        const c = (r + 1) * segments + s;
+        const d = (r + 1) * segments + ((s + 1) % segments);
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
   }
 
   function resetBattle() {
@@ -337,12 +406,14 @@
       blueprint: clone(blueprint),
       stats,
       hp: stats.maxHp,
-      pos: new THREE.Vector2(team === 0 ? -2.15 : 2.15, team === 0 ? -0.35 : 0.35),
-      vel: new THREE.Vector2(0, 0),
+      pos: new THREE.Vector2(team === 0 ? -2.1 : 2.1, team === 0 ? -0.42 : 0.42),
+      vel: new THREE.Vector2(team === 0 ? 2.36 : -2.36, team === 0 ? 0.42 : -0.42),
       yaw: team === 0 ? 0 : Math.PI,
-      omega: 0,
+      omega: team === 0 ? 1.1 : -1.1,
       cooldowns: {},
       active: new Set(),
+      out: false,
+      rimTime: 0,
       group: new THREE.Group(),
       core: null,
       partGroups: {}
@@ -392,17 +463,17 @@
     slotDefs.forEach((slot) => {
       const partId = bot.blueprint.slots[slot.id] || "empty";
       if (partId === "empty") return;
-      const partGroup = createPartGroup(partId, slot.angle);
+      const partGroup = createPartGroup(partId, slot);
       bot.partGroups[slot.id] = partGroup;
       bot.group.add(partGroup);
     });
   }
 
-  function createPartGroup(partId, angle) {
+  function createPartGroup(partId, slot) {
     const part = parts[partId];
     const group = new THREE.Group();
     group.userData.partId = partId;
-    const normal = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const normal = slotNormal(slot);
     group.position.copy(normal.clone().multiplyScalar(0.72));
 
     const material = new THREE.MeshStandardMaterial({
@@ -510,10 +581,10 @@
     handleBotCollision(dt);
     updateHud();
 
-    if (playerBot.hp <= 0 || enemyBot.hp <= 0 || battleTime >= 45) {
+    if (playerBot.out || enemyBot.out || playerBot.hp <= 0 || enemyBot.hp <= 0 || battleTime >= 45) {
       running = false;
-      const p = Math.max(0, playerBot.hp);
-      const e = Math.max(0, enemyBot.hp);
+      const p = scoreBot(playerBot);
+      const e = scoreBot(enemyBot);
       els.battleState.textContent = p === e ? "DRAW" : p > e ? "WIN" : "LOSE";
     }
   }
@@ -539,8 +610,9 @@
 
       if (partId === "jet") {
         const pulse = 0.85 + Math.sin(battleTime * 7.5 + slot.angle * 2) * 0.16;
+        const mountPower = 1 - Math.abs(slot.vertical || 0) * 0.3;
         const forceAngle = mountAngle + Math.PI;
-        applyForce(bot, forceAngle, 3.2 * pulse, mountAngle, dt);
+        applyForce(bot, forceAngle, 4.4 * pulse * mountPower, mountAngle, dt);
         bot.active.add(slot.id);
       }
 
@@ -560,6 +632,9 @@
 
     if (eyeCount === 0) {
       bot.omega += wrapAngle(toEnemy - bot.yaw) * 0.22 * dt;
+    } else {
+      const seek = vectorFromAngle(toEnemy).multiplyScalar((0.28 + eyeCount * 0.06) * dt);
+      bot.vel.add(seek);
     }
   }
 
@@ -572,23 +647,55 @@
   }
 
   function integrateBot(bot, dt) {
-    bot.pos.add(bot.vel.clone().multiplyScalar(dt));
-    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
-    bot.vel.multiplyScalar(Math.exp(-1.15 * dt));
-    bot.omega *= Math.exp(-1.85 * dt);
-
-    const limit = 4.85;
-    const radius = bot.pos.length();
-    if (radius > limit) {
-      const normal = bot.pos.clone().normalize();
-      bot.pos.copy(normal.multiplyScalar(limit));
-      const outward = bot.vel.dot(normal);
-      if (outward > 0) bot.vel.add(normal.multiplyScalar(-outward * 1.55));
-      bot.omega += (bot.team === 0 ? -1 : 1) * 0.2;
-      bot.hp -= 1.5 * dt;
+    if (bot.out) {
+      bot.pos.add(bot.vel.clone().multiplyScalar(dt));
+      bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
+      bot.vel.multiplyScalar(Math.exp(-0.45 * dt));
+      return;
     }
 
-    if (bot.vel.length() > 5.2) bot.vel.setLength(5.2);
+    const beforeRadius = bot.pos.length();
+    if (beforeRadius > 0.02) {
+      const towardCenter = bot.pos.clone().normalize().multiplyScalar(-(0.2 + beforeRadius * 0.1));
+      bot.vel.add(towardCenter.multiplyScalar(dt));
+    }
+
+    const tilt = Math.min(0.86, Math.max(0, battleTime - 10) * 0.024);
+    if (tilt > 0) {
+      const tiltAngle = battleTime * 0.72;
+      bot.vel.add(new THREE.Vector2(Math.cos(tiltAngle), Math.sin(tiltAngle)).multiplyScalar(tilt * dt));
+    }
+
+    bot.pos.add(bot.vel.clone().multiplyScalar(dt));
+    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
+    bot.vel.multiplyScalar(Math.exp(-0.74 * dt));
+    bot.omega *= Math.exp(-1.44 * dt);
+
+    const radius = bot.pos.length();
+    if (radius > RIM_RADIUS) {
+      const normal = bot.pos.clone().normalize();
+      const outward = bot.vel.dot(normal);
+      const slip = Math.max(0, radius - RIM_RADIUS);
+      if (battleTime > 12) {
+        bot.rimTime += (1 + slip * 2.2 + Math.max(0, outward) * 0.5) * dt;
+      }
+      bot.hp -= (3.6 + slip * 6 + Math.max(0, outward) * 4.1) * dt;
+      if (outward > 0.05) bot.vel.add(normal.multiplyScalar((0.18 + slip * 1.0) * dt));
+      bot.omega += (bot.team === 0 ? -1 : 1) * 0.35 * dt;
+    } else {
+      bot.rimTime = Math.max(0, bot.rimTime - dt * 2.2);
+    }
+
+    if (radius > KO_RADIUS || bot.rimTime > 1.8) {
+      bot.out = true;
+      bot.hp = 0;
+      const exitNormal = bot.pos.clone().normalize();
+      bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
+      bot.vel.add(exitNormal.multiplyScalar(1.7));
+      bot.omega += bot.team === 0 ? -2.6 : 2.6;
+    }
+
+    if (bot.vel.length() > 7.4) bot.vel.setLength(7.4);
     bot.hp = Math.max(0, bot.hp);
   }
 
@@ -615,6 +722,7 @@
       const targetBot = shot.team === 0 ? enemyBot : playerBot;
       if (shot.pos.distanceTo(targetBot.pos) < 0.76 && targetBot.hp > 0) {
         damageBot(targetBot, shot.damage, angleTo(targetBot.pos, shot.pos));
+        targetBot.vel.add(shot.vel.clone().normalize().multiplyScalar(0.55));
         shot.life = 0;
       }
       if (shot.pos.length() > 5.7) shot.life = 0;
@@ -640,9 +748,9 @@
     enemyBot.pos.add(normal.clone().multiplyScalar(overlap * 0.5));
 
     const rel = playerBot.vel.clone().sub(enemyBot.vel);
-    const impact = Math.max(0.8, Math.abs(rel.dot(normal)) + 0.4);
-    playerBot.vel.add(normal.clone().multiplyScalar(-impact * 0.7));
-    enemyBot.vel.add(normal.clone().multiplyScalar(impact * 0.7));
+    const impact = Math.max(1.05, Math.abs(rel.dot(normal)) + 0.65);
+    playerBot.vel.add(normal.clone().multiplyScalar(-impact * 0.9));
+    enemyBot.vel.add(normal.clone().multiplyScalar(impact * 0.9));
 
     contactDamage(playerBot, enemyBot, normal, dt);
     contactDamage(enemyBot, playerBot, normal.clone().multiplyScalar(-1), dt);
@@ -655,11 +763,13 @@
       const partId = attacker.blueprint.slots[slot.id];
       const diff = Math.abs(wrapAngle(hitAngle - (attacker.yaw + slot.angle)));
       if (partId === "spike" && diff < 0.72) {
-        damage += 24 * dt;
+        damage += 18 * dt;
+        defender.vel.add(directionToDefender.clone().multiplyScalar(0.5 * dt));
         attacker.active.add(slot.id);
       }
       if (partId === "weight" && diff < 0.95) {
-        damage += 7 * dt;
+        damage += 4 * dt;
+        defender.vel.add(directionToDefender.clone().multiplyScalar(0.25 * dt));
         attacker.active.add(slot.id);
       }
     });
@@ -681,7 +791,9 @@
   }
 
   function syncBotMesh(bot, dt) {
-    bot.group.position.set(bot.pos.x, 0, bot.pos.y);
+    const radius = bot.pos.length();
+    const y = bowlHeight(Math.min(radius, ARENA_RADIUS)) + 0.64 - (bot.out ? Math.max(0, radius - ARENA_RADIUS) * 0.55 : 0);
+    bot.group.position.set(bot.pos.x, y, bot.pos.y);
     bot.group.rotation.y = -bot.yaw;
     bot.core.rotation.x += bot.vel.y * dt * 1.6;
     bot.core.rotation.z -= bot.vel.x * dt * 1.6;
@@ -697,7 +809,7 @@
 
   function updateProjectilesVisuals() {
     projectiles.forEach((shot) => {
-      shot.mesh.position.set(shot.pos.x, -0.03, shot.pos.y);
+      shot.mesh.position.set(shot.pos.x, bowlHeight(Math.min(shot.pos.length(), ARENA_RADIUS)) + 0.7, shot.pos.y);
     });
   }
 
@@ -718,6 +830,30 @@
     els.playerHp.style.width = `${Math.max(0, (playerBot.hp / playerBot.stats.maxHp) * 100)}%`;
     els.enemyHp.style.width = `${Math.max(0, (enemyBot.hp / enemyBot.stats.maxHp) * 100)}%`;
     els.clock.textContent = battleTime.toFixed(1);
+    window.AsyncTankDebug = {
+      time: battleTime,
+      player: {
+        radius: playerBot.pos.length(),
+        hp: playerBot.hp,
+        out: playerBot.out,
+        rimTime: playerBot.rimTime
+      },
+      enemy: {
+        radius: enemyBot.pos.length(),
+        hp: enemyBot.hp,
+        out: enemyBot.out,
+        rimTime: enemyBot.rimTime
+      }
+    };
+    document.body.dataset.playerRadius = playerBot.pos.length().toFixed(3);
+    document.body.dataset.enemyRadius = enemyBot.pos.length().toFixed(3);
+    document.body.dataset.playerRim = playerBot.rimTime.toFixed(3);
+    document.body.dataset.enemyRim = enemyBot.rimTime.toFixed(3);
+  }
+
+  function scoreBot(bot) {
+    if (bot.out) return -1000;
+    return Math.max(0, bot.hp) - bot.pos.length() * 4;
   }
 
   function clearProjectiles() {
@@ -763,6 +899,17 @@
       clean.slots[slot.id] = partId;
     });
     return clean;
+  }
+
+  function bowlHeight(radius) {
+    const t = Math.min(radius / ARENA_RADIUS, 1.25);
+    return -0.78 + t * t * 0.62;
+  }
+
+  function slotNormal(slot) {
+    const y = slot.vertical || 0;
+    const horizontal = Math.sqrt(Math.max(0.001, 1 - y * y));
+    return new THREE.Vector3(Math.cos(slot.angle) * horizontal, y, Math.sin(slot.angle) * horizontal).normalize();
   }
 
   function vectorFromAngle(angle) {
