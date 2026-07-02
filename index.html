@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Prompt Bastion Prototype</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="arena-band">
+        <div class="topbar">
+          <div>
+            <p class="eyebrow">ASYNC BOT BATTLE</p>
+            <h1>Prompt Bastion</h1>
+          </div>
+          <button id="runBattle" class="primary-button" type="button">Battle</button>
+        </div>
+        <canvas id="arena" width="960" height="540" aria-label="battle arena"></canvas>
+        <div class="battle-readout">
+          <span id="battleStatus">BOTを組んで Battle を押してください</span>
+          <span id="battleTimer">0.0s</span>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <nav class="tabs" aria-label="editor tabs">
+          <button class="tab active" data-tab="build" type="button">Build</button>
+          <button class="tab" data-tab="code" type="button">Code</button>
+          <button class="tab" data-tab="versus" type="button">Versus</button>
+        </nav>
+
+        <section id="buildTab" class="tab-panel active">
+          <div class="team-header">
+            <label>
+              Team name
+              <input id="teamName" type="text" value="Rush Seed" maxlength="24">
+            </label>
+            <button id="randomize" class="icon-button" type="button" title="ランダム構築">Shuffle</button>
+          </div>
+          <div id="unitEditors" class="unit-grid"></div>
+        </section>
+
+        <section id="codeTab" class="tab-panel">
+          <div class="code-actions">
+            <button id="exportDsl" type="button">Export BOT Code</button>
+            <button id="importDsl" type="button">Import BOT Code</button>
+            <button id="copyShare" type="button">Make Share Code</button>
+          </div>
+          <textarea id="botCode" spellcheck="false"></textarea>
+          <p class="hint">外部LLMには「この形式でBOTコードを書いて」と渡せます。実行コードではなく、安全な宣言データだけを読み込みます。</p>
+        </section>
+
+        <section id="versusTab" class="tab-panel">
+          <div class="code-actions">
+            <button id="loadSampleEnemy" type="button">Load Sample Enemy</button>
+            <button id="loadEnemyCode" type="button">Load Enemy Code</button>
+          </div>
+          <textarea id="enemyCode" spellcheck="false" placeholder="相手のShare CodeまたはBOT Codeを貼り付け"></textarea>
+          <div class="opponent-card">
+            <strong id="enemyName">Training Wall</strong>
+            <span id="enemySummary">中距離迎撃型のサンプル相手</span>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
