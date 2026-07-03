@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AsyncTank Katamari BOT</title>
-    <link rel="stylesheet" href="style.css?v=20260703-rapier4">
+    <link rel="stylesheet" href="style.css?v=20260704-workbench1">
   </head>
   <body>
     <main class="game-shell">
@@ -35,8 +35,13 @@
           <div class="status-pill" id="battleState">READY</div>
         </div>
 
-        <div class="body-map" id="bodyMap" aria-label="part mounts">
-          <div class="body-core">CORE</div>
+        <div class="selection-readout" id="selectionReadout" aria-live="polite"></div>
+
+        <div class="workbench">
+          <div class="body-map" id="bodyMap" aria-label="part mounts">
+            <div class="body-core">CORE</div>
+          </div>
+          <div class="builder-telemetry" id="builderTelemetry" aria-label="build telemetry"></div>
         </div>
 
         <div class="palette" id="palette" aria-label="part palette"></div>
@@ -56,6 +61,6 @@
       </aside>
     </main>
 
-    <script src="app.js?v=20260703-rapier4"></script>
+    <script src="app.js?v=20260704-workbench1"></script>
   </body>
 </html>

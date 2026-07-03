@@ -179,6 +179,7 @@ textarea {
 .actions {
   display: flex;
   gap: 8px;
+  width: max-content;
   border-radius: 8px;
   padding: 8px;
   pointer-events: auto;
@@ -237,11 +238,149 @@ textarea {
   font-weight: 900;
 }
 
+.selection-readout {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 52px;
+}
+
+.selected-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background:
+    radial-gradient(circle at 36% 28%, rgba(255, 255, 255, 0.22), transparent 34%),
+    rgba(255, 255, 255, 0.07);
+  font-size: 24px;
+  box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.04);
+}
+
+.selection-readout div {
+  min-width: 0;
+}
+
+.selection-readout div > span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.selection-readout strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.balance-chip {
+  display: block;
+  min-width: 42px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(244, 239, 230, 0.22);
+  color: var(--ink);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench {
+  display: grid;
+  gap: 10px;
+}
+
 .body-map {
   position: relative;
   width: min(286px, 76vw);
   aspect-ratio: 1;
   margin: 0 auto;
+  border-radius: 50%;
+  border: 1px solid rgba(244, 239, 230, 0.16);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(244, 239, 230, 0.08) 0 16%, transparent 17%),
+    radial-gradient(circle at 50% 50%, transparent 0 48%, rgba(255, 184, 78, 0.08) 49% 52%, transparent 53%),
+    conic-gradient(from -20deg, rgba(85, 216, 240, 0.16), rgba(255, 184, 78, 0.1), rgba(255, 100, 97, 0.12), rgba(126, 224, 129, 0.12), rgba(85, 216, 240, 0.16));
+  box-shadow:
+    inset 0 0 42px rgba(0, 0, 0, 0.46),
+    0 12px 38px rgba(0, 0, 0, 0.25);
+}
+
+.map-ring {
+  position: absolute;
+  inset: 11%;
+  border-radius: 50%;
+  border: 1px dashed rgba(244, 239, 230, 0.18);
+  pointer-events: none;
+}
+
+.map-ring.inner {
+  inset: 29%;
+  border-color: rgba(244, 239, 230, 0.12);
+}
+
+.direction-vector {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: 35%;
+  height: 3px;
+  border-radius: 999px;
+  transform: rotate(var(--vector-angle, 0rad)) scaleX(var(--vector-scale, 0));
+  transform-origin: 0 50%;
+  pointer-events: none;
+  box-shadow: 0 0 16px currentColor;
+}
+
+.direction-vector::after {
+  content: "";
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-block: 5px solid transparent;
+  border-left: 8px solid currentColor;
+  transform: translateY(-50%);
+}
+
+.thrust-vector {
+  color: var(--amber);
+  background: currentColor;
+}
+
+.attack-vector {
+  color: var(--red);
+  background: currentColor;
+}
+
+.guard-vector {
+  color: var(--green);
+  background: currentColor;
+}
+
+.balance-dot {
+  position: absolute;
+  left: calc(50% + var(--balance-x, 0%));
+  top: calc(50% + var(--balance-y, 0%));
+  z-index: 4;
+  width: 13px;
+  height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-radius: 50%;
+  border: 2px solid rgba(13, 16, 18, 0.86);
+  background: var(--ink);
+  box-shadow: 0 0 0 2px rgba(244, 239, 230, 0.4), 0 0 18px rgba(244, 239, 230, 0.6);
+  pointer-events: none;
 }
 
 .body-core {
@@ -257,10 +396,12 @@ textarea {
   color: rgba(244, 239, 230, 0.78);
   font-size: 12px;
   font-weight: 900;
+  z-index: 3;
 }
 
 .slot-node {
   position: absolute;
+  z-index: 5;
   width: 38px;
   height: 38px;
   margin: -19px 0 0 -19px;
@@ -274,6 +415,27 @@ textarea {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
+.slot-node[data-role="move"] {
+  box-shadow: 0 0 18px rgba(255, 184, 78, 0.24), 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.slot-node[data-role="attack"] {
+  box-shadow: 0 0 18px rgba(255, 100, 97, 0.24), 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.slot-node[data-role="guard"],
+.slot-node[data-role="mass"] {
+  box-shadow: 0 0 18px rgba(126, 224, 129, 0.18), 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.slot-node.cap-slot {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-style: dashed;
+  font-size: 16px;
+}
+
 .slot-node.active {
   outline: 3px solid var(--amber);
   outline-offset: 2px;
@@ -285,7 +447,25 @@ textarea {
 
 .palette {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+.palette-group {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.palette-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.palette-tray {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -301,6 +481,55 @@ textarea {
 .part-button.active {
   outline: 2px solid var(--amber);
   outline-offset: 2px;
+}
+
+.builder-telemetry {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 7px;
+}
+
+.telemetry-row {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.telemetry-mark,
+.telemetry-label {
+  color: var(--row-color);
+  text-align: center;
+  font-weight: 900;
+}
+
+.telemetry-mark {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.telemetry-label {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.telemetry-track {
+  position: relative;
+  height: 28px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.telemetry-track span {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), var(--row-color));
+  transition: width 180ms ease;
 }
 
 .preset-row {
@@ -366,12 +595,16 @@ textarea {
   }
 }
 
-@media (max-width: 460px) {
+@media (max-width: 600px) {
   .hud {
+    grid-template-columns: 1fr;
     gap: 8px;
   }
 
   .actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 6px;
     padding: 6px;
   }

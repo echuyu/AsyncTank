@@ -30,14 +30,21 @@
   }));
 
   const parts = {
-    empty: { mark: "·", name: "EMPTY", color: "#687176", mass: 0 },
-    eye: { mark: "◉", name: "EYE", color: "#55d8f0", mass: 0.12 },
-    jet: { mark: "↯", name: "JET", color: "#ffb84e", mass: 0.22 },
-    spike: { mark: "▲", name: "SPIKE", color: "#ff6461", mass: 0.3 },
-    cannon: { mark: "●", name: "GUN", color: "#f4df62", mass: 0.36 },
-    shield: { mark: "▰", name: "SHIELD", color: "#7ee081", mass: 0.32 },
-    weight: { mark: "◆", name: "WEIGHT", color: "#9b8cff", mass: 0.55 }
+    empty: { mark: "·", name: "EMPTY", color: "#687176", mass: 0, role: "core" },
+    eye: { mark: "◉", name: "EYE", color: "#55d8f0", mass: 0.12, role: "sense" },
+    jet: { mark: "↯", name: "JET", color: "#ffb84e", mass: 0.22, role: "move" },
+    spike: { mark: "▲", name: "SPIKE", color: "#ff6461", mass: 0.3, role: "attack" },
+    cannon: { mark: "●", name: "GUN", color: "#f4df62", mass: 0.36, role: "attack" },
+    shield: { mark: "▰", name: "SHIELD", color: "#7ee081", mass: 0.32, role: "guard" },
+    weight: { mark: "◆", name: "WEIGHT", color: "#9b8cff", mass: 0.55, role: "mass" }
   };
+
+  const paletteGroups = [
+    { label: "CORE", ids: ["empty", "eye"] },
+    { label: "MOVE", ids: ["jet"] },
+    { label: "HIT", ids: ["spike", "cannon"] },
+    { label: "GUARD", ids: ["shield", "weight"] }
+  ];
 
   const playerPresets = [
     makeBlueprint("Mono Core", {
@@ -128,6 +135,8 @@
   const els = {
     scene: document.querySelector("#scene"),
     bodyMap: document.querySelector("#bodyMap"),
+    selectionReadout: document.querySelector("#selectionReadout"),
+    builderTelemetry: document.querySelector("#builderTelemetry"),
     palette: document.querySelector("#palette"),
     presets: document.querySelector("#presets"),
     enemySelect: document.querySelector("#enemySelect"),
@@ -149,10 +158,14 @@
   let playerBot;
   let enemyBot;
   let projectiles = [];
+  let effects = [];
   let running = false;
   let battleTime = 0;
   let lastTick = performance.now();
   let idleSpin = 0;
+  let hitStop = 0;
+  let cameraShake = 0;
+  let lastImpactAt = -1;
   let physicsWorld;
   let arenaWallColliders = [];
 
@@ -272,15 +285,27 @@
   }
 
   function renderBodyMap() {
+    const readout = calcBlueprintReadout(playerBlueprint);
     els.botName.textContent = playerBlueprint.name;
-    els.bodyMap.innerHTML = '<div class="body-core">CORE</div>';
+    els.bodyMap.innerHTML = `
+      <div class="map-ring outer"></div>
+      <div class="map-ring inner"></div>
+      <div class="direction-vector thrust-vector" data-vector="thrust"></div>
+      <div class="direction-vector attack-vector" data-vector="attack"></div>
+      <div class="direction-vector guard-vector" data-vector="guard"></div>
+      <div class="balance-dot" aria-hidden="true"></div>
+      <div class="body-core">CORE</div>
+    `;
+    applyWorkbenchVectors(readout);
     slotDefs.forEach((slot) => {
       const partId = playerBlueprint.slots[slot.id] || "empty";
       const part = parts[partId];
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""}`;
+      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""} ${slot.vertical ? "cap-slot" : "ring-slot"}`;
       button.dataset.slot = slot.id;
+      button.dataset.part = partId;
+      button.dataset.role = part.role;
       button.title = `${slot.label} ${part.name}`;
       button.style.left = `${slot.mapX}%`;
       button.style.top = `${slot.mapY}%`;
@@ -288,20 +313,182 @@
       button.textContent = part.mark;
       els.bodyMap.append(button);
     });
+    renderSelectionReadout(readout);
+    renderBuilderTelemetry(readout);
+    updatePaletteState();
   }
 
   function renderPalette() {
     els.palette.innerHTML = "";
-    Object.entries(parts).forEach(([id, part]) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "part-button";
-      button.dataset.part = id;
-      button.title = part.name;
-      button.style.color = part.color;
-      button.textContent = part.mark;
-      els.palette.append(button);
+    paletteGroups.forEach((groupDef) => {
+      const group = document.createElement("div");
+      group.className = "palette-group";
+      const label = document.createElement("span");
+      label.className = "palette-label";
+      label.textContent = groupDef.label;
+      group.append(label);
+
+      const tray = document.createElement("div");
+      tray.className = "palette-tray";
+      groupDef.ids.forEach((id) => {
+        const part = parts[id];
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "part-button";
+        button.dataset.part = id;
+        button.title = part.name;
+        button.style.color = part.color;
+        button.textContent = part.mark;
+        tray.append(button);
+      });
+      group.append(tray);
+      els.palette.append(group);
     });
+    updatePaletteState();
+  }
+
+  function updatePaletteState() {
+    if (!els.palette) return;
+    const selectedPart = playerBlueprint.slots[selectedSlot] || "empty";
+    els.palette.querySelectorAll("[data-part]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.part === selectedPart);
+    });
+  }
+
+  function renderSelectionReadout(readout) {
+    if (!els.selectionReadout) return;
+    const selectedPartId = playerBlueprint.slots[selectedSlot] || "empty";
+    const part = parts[selectedPartId];
+    const slot = slotDefs.find((item) => item.id === selectedSlot);
+    els.selectionReadout.innerHTML = "";
+
+    const mark = document.createElement("span");
+    mark.className = "selected-mark";
+    mark.style.color = part.color;
+    mark.textContent = part.mark;
+
+    const text = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = `${slot.vertical ? "CAP" : "RIM"} ${slot.label}`;
+    const name = document.createElement("strong");
+    name.textContent = part.name;
+    text.append(label, name);
+
+    const balance = document.createElement("span");
+    balance.className = "balance-chip";
+    balance.textContent = `${Math.round((1 - readout.balanceAmount) * 100)}`;
+
+    els.selectionReadout.append(mark, text, balance);
+  }
+
+  function renderBuilderTelemetry(readout) {
+    if (!els.builderTelemetry) return;
+    els.builderTelemetry.innerHTML = "";
+    [
+      { mark: "↯", label: "THR", value: readout.thrustScore, color: "#ffb84e" },
+      { mark: "▲", label: "HIT", value: readout.attackScore, color: "#ff6461" },
+      { mark: "▰", label: "GRD", value: readout.guardScore, color: "#7ee081" },
+      { mark: "◎", label: "BAL", value: 1 - readout.balanceAmount, color: "#f4efe6" },
+      { mark: "◆", label: "MAS", value: readout.massScore, color: "#9b8cff" }
+    ].forEach((row) => {
+      const item = document.createElement("div");
+      item.className = "telemetry-row";
+      item.style.setProperty("--row-color", row.color);
+
+      const mark = document.createElement("span");
+      mark.className = "telemetry-mark";
+      mark.textContent = row.mark;
+
+      const label = document.createElement("span");
+      label.className = "telemetry-label";
+      label.textContent = row.label;
+
+      const track = document.createElement("span");
+      track.className = "telemetry-track";
+      const fill = document.createElement("span");
+      fill.style.width = `${Math.round(clamp01(row.value) * 100)}%`;
+      track.append(fill);
+
+      item.append(mark, label, track);
+      els.builderTelemetry.append(item);
+    });
+  }
+
+  function applyWorkbenchVectors(readout) {
+    els.bodyMap.style.setProperty("--balance-x", `${(readout.balance.x * 30).toFixed(2)}%`);
+    els.bodyMap.style.setProperty("--balance-y", `${(readout.balance.y * 30).toFixed(2)}%`);
+    setDirectionVector("thrust", readout.vectors.thrust, readout.thrustScore);
+    setDirectionVector("attack", readout.vectors.attack, readout.attackScore);
+    setDirectionVector("guard", readout.vectors.guard, readout.guardScore);
+  }
+
+  function setDirectionVector(kind, vector, strength) {
+    const element = els.bodyMap.querySelector(`[data-vector="${kind}"]`);
+    if (!element) return;
+    const angle = vector.lengthSq() > 0.0001 ? Math.atan2(vector.y, vector.x) : 0;
+    element.style.setProperty("--vector-angle", `${angle}rad`);
+    element.style.setProperty("--vector-scale", `${(0.28 + clamp01(strength) * 0.92).toFixed(3)}`);
+    element.style.opacity = `${strength > 0.03 ? 0.32 + clamp01(strength) * 0.58 : 0}`;
+  }
+
+  function calcBlueprintReadout(blueprint) {
+    const balance = new THREE.Vector2();
+    const thrust = new THREE.Vector2();
+    const attack = new THREE.Vector2();
+    const guard = new THREE.Vector2();
+    let totalMass = 1.25;
+    let mountedMass = 0;
+    let eyeCount = 0;
+    let jetCount = 0;
+
+    slotDefs.forEach((slot) => {
+      const partId = blueprint.slots[slot.id] || "empty";
+      const part = parts[partId];
+      const dir = mapDirection(slot);
+      const verticalScale = slot.vertical ? 0.72 : 1;
+      totalMass += part.mass;
+
+      if (partId !== "empty") {
+        const mass = part.mass * verticalScale;
+        balance.add(dir.clone().multiplyScalar(mass));
+        mountedMass += mass;
+      }
+
+      if (partId === "eye") eyeCount += 1;
+      if (partId === "jet") {
+        jetCount += 1;
+        thrust.add(dir.clone().multiplyScalar(-1 * verticalScale));
+      }
+      if (partId === "spike") attack.add(dir.clone().multiplyScalar(1.05 * verticalScale));
+      if (partId === "cannon") attack.add(dir.clone().multiplyScalar(0.82 * verticalScale));
+      if (partId === "shield") guard.add(dir.clone().multiplyScalar(1.0 * verticalScale));
+      if (partId === "weight") guard.add(dir.clone().multiplyScalar(0.34 * verticalScale));
+    });
+
+    if (mountedMass > 0.001) balance.multiplyScalar(1 / mountedMass);
+    const balanceAmount = clamp01(balance.length() * 1.45);
+    const thrustScore = clamp01((thrust.length() + jetCount * 0.34) / 4.2);
+    const attackScore = clamp01(attack.length() / 3.8);
+    const guardScore = clamp01((guard.length() + countPart(blueprint, "shield") * 0.18) / 4.0);
+    const senseScore = clamp01(eyeCount / 3);
+    const massScore = clamp01((totalMass - 1.25) / 4.0);
+    const wobbleScore = clamp01(balanceAmount * 0.68 + Math.max(0, jetCount - 2) * 0.08 + massScore * 0.12 - senseScore * 0.08);
+
+    return {
+      balance,
+      balanceAmount,
+      thrustScore,
+      attackScore,
+      guardScore,
+      senseScore,
+      massScore,
+      wobbleScore,
+      vectors: { thrust, attack, guard }
+    };
+  }
+
+  function mapDirection(slot) {
+    return new THREE.Vector2(Math.sin(slot.angle), -Math.cos(slot.angle));
   }
 
   function renderPresets() {
@@ -336,6 +523,7 @@
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.y = bowlHeight(ARENA_RADIUS) + 0.03;
+    group.userData.outerRing = ring;
     group.add(ring);
 
     for (let r = 1; r <= 4; r += 1) {
@@ -349,6 +537,11 @@
       group.add(guide);
     }
 
+    const bumperGroup = new THREE.Group();
+    group.userData.bumperGroup = bumperGroup;
+    group.userData.wallsEnabled = true;
+    group.add(bumperGroup);
+
     for (let i = 0; i < 24; i += 1) {
       const angle = (Math.PI * 2 * i) / 24;
       const post = new THREE.Mesh(
@@ -357,7 +550,7 @@
       );
       post.position.set(Math.cos(angle) * ARENA_RADIUS, bowlHeight(ARENA_RADIUS) + 0.35, Math.sin(angle) * ARENA_RADIUS);
       post.rotation.y = -angle;
-      group.add(post);
+      bumperGroup.add(post);
     }
 
     return group;
@@ -393,10 +586,15 @@
   function resetBattle() {
     running = false;
     battleTime = 0;
+    hitStop = 0;
+    cameraShake = 0;
+    lastImpactAt = -1;
     clearProjectiles();
+    clearEffects();
     if (playerBot) scene.remove(playerBot.group);
     if (enemyBot) scene.remove(enemyBot.group);
     resetPhysicsWorld();
+    updateArenaWalls();
     playerBot = createBot(playerBlueprint, 0);
     enemyBot = createBot(enemyBlueprint, 1);
     scene.add(playerBot.group, enemyBot.group);
@@ -656,20 +854,24 @@
   }
 
   function loop(now) {
-    const dt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
+    const rawDt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
     lastTick = now;
-    idleSpin += dt;
+    idleSpin += rawDt;
+    const simDt = hitStop > 0 ? Math.min(rawDt * 0.18, 0.006) : rawDt;
+    hitStop = Math.max(0, hitStop - rawDt);
+    cameraShake = Math.max(0, cameraShake - rawDt * 2.25);
 
-    if (running) updateBattle(dt);
+    if (running) updateBattle(simDt);
     else {
-      playerBot.yaw += dt * 0.18;
-      enemyBot.yaw -= dt * 0.18;
+      playerBot.yaw += rawDt * 0.18;
+      enemyBot.yaw -= rawDt * 0.18;
     }
 
-    syncBotMesh(playerBot, dt);
-    syncBotMesh(enemyBot, dt);
+    syncBotMesh(playerBot, simDt);
+    syncBotMesh(enemyBot, simDt);
     updateProjectilesVisuals();
-    updateCamera(dt);
+    updateEffects(rawDt);
+    updateCamera(rawDt);
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
@@ -701,6 +903,17 @@
     arenaWallColliders.forEach((collider) => {
       if (collider.isEnabled() !== enabled) collider.setEnabled(enabled);
     });
+    if (arena.userData.wallsEnabled !== enabled) {
+      arena.userData.wallsEnabled = enabled;
+      if (!enabled && running) {
+        triggerImpact(0.7);
+        spawnImpactEffect(new THREE.Vector2(0, 0), { color: 0xffd36b, power: 0.72, sparks: 18 });
+      }
+    }
+    if (arena.userData.bumperGroup) arena.userData.bumperGroup.visible = enabled;
+    if (arena.userData.outerRing?.material?.emissive) {
+      arena.userData.outerRing.material.emissive.setHex(enabled ? 0x5a3107 : 0xff6a1a);
+    }
   }
 
   function updateBot(bot, opponent, dt) {
@@ -866,6 +1079,12 @@
     bot.outScore = Math.max(0, bot.hp) - bot.pos.length() * 3 - bot.rimTime * 8;
     bot.hp = 0;
     const exitNormal = bot.pos.length() > 0.01 ? bot.pos.clone().normalize() : new THREE.Vector2(bot.team === 0 ? -1 : 1, 0);
+    spawnImpactEffect(exitNormal.clone().multiplyScalar(ARENA_RADIUS), {
+      color: bot.team === 0 ? 0x55d8f0 : 0xff6461,
+      power: 1.08,
+      sparks: 24
+    });
+    triggerImpact(1.05);
     bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
     bot.vel.add(exitNormal.clone().multiplyScalar(1.7));
     bot.omega += bot.team === 0 ? -2.6 : 2.6;
@@ -901,6 +1120,12 @@
       if (shot.pos.distanceTo(targetBot.pos) < 0.76 && targetBot.hp > 0) {
         damageBot(targetBot, shot.damage, angleTo(targetBot.pos, shot.pos));
         addBotVelocity(targetBot, shot.vel.clone().normalize().multiplyScalar(0.55));
+        spawnImpactEffect(shot.pos.clone(), {
+          color: shot.team === 0 ? 0x55d8f0 : 0xff6461,
+          power: 0.42,
+          sparks: 9
+        });
+        triggerImpact(0.34);
         shot.life = 0;
       }
       if (shot.pos.length() > 5.7) shot.life = 0;
@@ -918,9 +1143,22 @@
   function handleBotCollision(dt) {
     const delta = enemyBot.pos.clone().sub(playerBot.pos);
     const distance = Math.max(delta.length(), 0.0001);
-    if (distance >= 1.46) return;
+    if (distance >= 1.72) return;
 
     const normal = delta.multiplyScalar(1 / distance);
+    const relVelocity = enemyBot.vel.clone().sub(playerBot.vel);
+    const impactSpeed = Math.max(0, Math.abs(relVelocity.dot(normal)) + (Math.abs(playerBot.omega) + Math.abs(enemyBot.omega)) * 0.08);
+    if (impactSpeed > 0.42 && battleTime - lastImpactAt > 0.1) {
+      const midpoint = playerBot.pos.clone().add(normal.clone().multiplyScalar(distance * 0.5));
+      const power = clamp01((impactSpeed - 0.25) / 3.8);
+      spawnImpactEffect(midpoint, {
+        color: power > 0.48 ? 0xffd36b : 0xf4efe6,
+        power: 0.28 + power * 0.74,
+        sparks: 8 + Math.round(power * 14)
+      });
+      triggerImpact(0.22 + power * 0.78);
+      lastImpactAt = battleTime;
+    }
     contactDamage(playerBot, enemyBot, normal, dt);
     contactDamage(enemyBot, playerBot, normal.clone().multiplyScalar(-1), dt);
   }
@@ -959,6 +1197,75 @@
     bot.hp -= amount * multiplier;
   }
 
+  function triggerImpact(power) {
+    const strength = clamp01(power);
+    hitStop = Math.max(hitStop, 0.018 + strength * 0.055);
+    cameraShake = Math.max(cameraShake, 0.18 + strength * 0.88);
+  }
+
+  function spawnImpactEffect(origin, options = {}) {
+    const power = Math.max(0.1, options.power || 0.45);
+    const color = options.color || 0xffd36b;
+    const group = new THREE.Group();
+    const radius = Math.min(origin.length(), ARENA_RADIUS);
+    group.position.set(origin.x, bowlHeight(radius) + 0.72, origin.y);
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.12 + power * 0.08, 0.01 + power * 0.004, 6, 44),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      })
+    );
+    ring.rotation.x = Math.PI / 2;
+    group.add(ring);
+
+    const sparks = [];
+    const sparkCount = options.sparks || Math.round(8 + power * 11);
+    for (let i = 0; i < sparkCount; i += 1) {
+      const angle = (TAU * i) / sparkCount + Math.random() * 0.38;
+      const speed = (0.8 + Math.random() * 1.5) * (0.75 + power);
+      const spark = new THREE.Mesh(
+        new THREE.SphereGeometry(0.018 + power * 0.012, 6, 4),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.94, depthWrite: false })
+      );
+      spark.userData.velocity = new THREE.Vector3(
+        Math.cos(angle) * speed,
+        0.35 + Math.random() * 0.8 + power * 0.28,
+        Math.sin(angle) * speed
+      );
+      group.add(spark);
+      sparks.push(spark);
+    }
+
+    scene.add(group);
+    effects.push({ group, ring, sparks, life: 0, duration: 0.34 + power * 0.22, power });
+  }
+
+  function updateEffects(dt) {
+    effects.forEach((effect) => {
+      effect.life += dt;
+      const t = Math.min(1, effect.life / effect.duration);
+      effect.ring.scale.setScalar(1 + t * (2.2 + effect.power * 2.1));
+      effect.ring.material.opacity = (1 - t) * 0.72;
+      effect.sparks.forEach((spark) => {
+        spark.position.addScaledVector(spark.userData.velocity, dt);
+        spark.userData.velocity.y -= 2.9 * dt;
+        spark.material.opacity = (1 - t) * 0.94;
+        spark.scale.setScalar(1 + t * 0.7);
+      });
+    });
+
+    effects = effects.filter((effect) => {
+      if (effect.life < effect.duration) return true;
+      disposeObject(effect.group);
+      return false;
+    });
+  }
+
   function syncBotMesh(bot, dt) {
     const radius = bot.pos.length();
     const y = bowlHeight(Math.min(radius, ARENA_RADIUS)) + 0.64 - (bot.out ? Math.max(0, radius - ARENA_RADIUS) * 0.55 : 0);
@@ -992,7 +1299,17 @@
     camera.position.x += (target.x - camera.position.x) * Math.min(1, dt * 2);
     camera.position.y += (height - camera.position.y) * Math.min(1, dt * 2);
     camera.position.z += (distance + target.z - camera.position.z) * Math.min(1, dt * 2);
-    camera.lookAt(target.x, -0.15, target.z);
+    const shake = cameraShake * (compact ? 0.065 : 0.085);
+    if (shake > 0.001) {
+      camera.position.x += Math.sin(idleSpin * 71.7) * shake;
+      camera.position.y += Math.cos(idleSpin * 53.1) * shake * 0.42;
+      camera.position.z += Math.cos(idleSpin * 83.3) * shake;
+    }
+    camera.lookAt(
+      target.x + Math.sin(idleSpin * 47.5) * shake * 0.25,
+      -0.15,
+      target.z + Math.cos(idleSpin * 41.9) * shake * 0.25
+    );
   }
 
   function updateHud() {
@@ -1021,6 +1338,7 @@
     document.body.dataset.playerRim = playerBot.rimTime.toFixed(3);
     document.body.dataset.enemyRim = enemyBot.rimTime.toFixed(3);
     document.body.dataset.dangerRadius = dangerRadius.toFixed(3);
+    document.body.dataset.wallPhase = battleTime < 13.5 ? "bumper" : "open";
   }
 
   function scoreBot(bot) {
@@ -1035,6 +1353,23 @@
       shot.mesh.material.dispose();
     });
     projectiles = [];
+  }
+
+  function clearEffects() {
+    effects.forEach((effect) => disposeObject(effect.group));
+    effects = [];
+  }
+
+  function disposeObject(object) {
+    if (object.parent) object.parent.remove(object);
+    object.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (Array.isArray(child.material)) {
+        child.material.forEach((material) => material.dispose());
+      } else if (child.material) {
+        child.material.dispose();
+      }
+    });
   }
 
   function resize() {
@@ -1105,6 +1440,10 @@
     while (value > Math.PI) value -= Math.PI * 2;
     while (value < -Math.PI) value += Math.PI * 2;
     return value;
+  }
+
+  function clamp01(value) {
+    return Math.min(1, Math.max(0, value));
   }
 
   function clone(value) {
