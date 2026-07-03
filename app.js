@@ -1,6 +1,7 @@
 (async function boot() {
   const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
-  const CANNON = await import("https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js");
+  const RAPIER = await import("https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.17.3/rapier.es.js");
+  await RAPIER.init();
 
   const TAU = Math.PI * 2;
   const ARENA_RADIUS = 5.18;
@@ -153,12 +154,7 @@
   let lastTick = performance.now();
   let idleSpin = 0;
   let physicsWorld;
-
-  const botPhysicsMaterial = new CANNON.Material("bot");
-  const botContactMaterial = new CANNON.ContactMaterial(botPhysicsMaterial, botPhysicsMaterial, {
-    friction: 0.18,
-    restitution: 0.62
-  });
+  let arenaWallColliders = [];
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -409,13 +405,27 @@
   }
 
   function resetPhysicsWorld() {
-    physicsWorld = new CANNON.World();
-    physicsWorld.gravity.set(0, 0, 0);
-    physicsWorld.allowSleep = false;
-    physicsWorld.defaultContactMaterial.friction = 0.16;
-    physicsWorld.defaultContactMaterial.restitution = 0.62;
-    physicsWorld.solver.iterations = 10;
-    physicsWorld.addContactMaterial(botContactMaterial);
+    physicsWorld = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    physicsWorld.timestep = 1 / 90;
+    physicsWorld.numSolverIterations = 12;
+    physicsWorld.numAdditionalFrictionIterations = 8;
+    arenaWallColliders = createArenaWallColliders();
+  }
+
+  function createArenaWallColliders() {
+    const colliders = [];
+    for (let i = 0; i < 32; i += 1) {
+      const angle = (TAU * i) / 32;
+      const normal = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+      const rotation = quaternionFromTo(new THREE.Vector3(1, 0, 0), normal);
+      const desc = RAPIER.ColliderDesc.cuboid(0.08, 0.78, 0.5)
+        .setTranslation(normal.x * 4.98, 0, normal.z * 4.98)
+        .setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w })
+        .setFriction(0.08)
+        .setRestitution(0.82);
+      colliders.push(physicsWorld.createCollider(desc));
+    }
+    return colliders;
   }
 
   function createBot(blueprint, team) {
@@ -426,7 +436,7 @@
       stats,
       hp: stats.maxHp,
       pos: new THREE.Vector2(team === 0 ? -2.1 : 2.1, team === 0 ? -0.42 : 0.42),
-      vel: new THREE.Vector2(team === 0 ? 1.72 : -1.72, team === 0 ? 0.3 : -0.3),
+      vel: new THREE.Vector2(team === 0 ? 1.15 : -1.15, team === 0 ? 0.24 : -0.24),
       yaw: team === 0 ? 0 : Math.PI,
       omega: team === 0 ? 1.1 : -1.1,
       cooldowns: {},
@@ -434,6 +444,7 @@
       out: false,
       rimTime: 0,
       body: null,
+      colliders: [],
       group: new THREE.Group(),
       core: null,
       partGroups: {}
@@ -446,22 +457,74 @@
   }
 
   function createBotBody(bot) {
-    const body = new CANNON.Body({
-      angularDamping: 0.62,
-      fixedRotation: false,
-      linearDamping: 0.38,
-      mass: bot.stats.mass,
-      material: botPhysicsMaterial,
-      position: new CANNON.Vec3(bot.pos.x, 0, bot.pos.y),
-      shape: new CANNON.Sphere(0.74)
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(bot.pos.x, 0, bot.pos.y)
+      .setLinvel(bot.vel.x, 0, bot.vel.y)
+      .setAngvel({ x: 0, y: bot.omega, z: 0 })
+      .enabledTranslations(true, false, true)
+      .enabledRotations(false, true, false)
+      .setLinearDamping(0.2)
+      .setAngularDamping(0.42)
+      .setCcdEnabled(true)
+      .setCanSleep(false);
+    const body = physicsWorld.createRigidBody(bodyDesc);
+    body.setAdditionalSolverIterations(8);
+
+    bot.colliders.push(
+      physicsWorld.createCollider(
+        RAPIER.ColliderDesc.ball(0.72).setMass(1.25).setFriction(0.16).setRestitution(0.58).setContactSkin(0.012),
+        body
+      )
+    );
+
+    slotDefs.forEach((slot) => {
+      const partId = bot.blueprint.slots[slot.id] || "empty";
+      if (partId === "empty") return;
+      const colliderDesc = createPartColliderDesc(partId, slot);
+      if (colliderDesc) bot.colliders.push(physicsWorld.createCollider(colliderDesc, body));
     });
-    body.velocity.set(bot.vel.x, 0, bot.vel.y);
-    body.angularVelocity.set(0, bot.omega, 0);
-    body.linearFactor.set(1, 0, 1);
-    body.angularFactor.set(0, 1, 0);
-    body.userData = { bot };
-    physicsWorld.addBody(body);
+
+    body.recomputeMassPropertiesFromColliders();
     return body;
+  }
+
+  function createPartColliderDesc(partId, slot) {
+    const part = parts[partId];
+    const normal = slotNormal(slot);
+    const colliderMass = Math.max(0.02, part.mass * (partId === "weight" ? 2.4 : 1.45));
+    let desc;
+    let offsetScale = 0.96;
+    let rotation = quaternionFromTo(new THREE.Vector3(0, 1, 0), normal);
+
+    if (partId === "eye") {
+      desc = RAPIER.ColliderDesc.ball(0.18).setRestitution(0.72).setFriction(0.1);
+      offsetScale = 0.9;
+    } else if (partId === "jet") {
+      desc = RAPIER.ColliderDesc.cone(0.24, 0.18).setRestitution(0.68).setFriction(0.08);
+      offsetScale = 0.98;
+      rotation = quaternionFromTo(new THREE.Vector3(0, 1, 0), normal.clone().negate());
+    } else if (partId === "spike") {
+      desc = RAPIER.ColliderDesc.cone(0.36, 0.19).setRestitution(0.92).setFriction(0.05);
+      offsetScale = 1.08;
+    } else if (partId === "cannon") {
+      desc = RAPIER.ColliderDesc.capsule(0.32, 0.1).setRestitution(0.72).setFriction(0.08);
+      offsetScale = 1.06;
+    } else if (partId === "shield") {
+      desc = RAPIER.ColliderDesc.cuboid(0.05, 0.36, 0.48).setRestitution(0.28).setFriction(0.54);
+      offsetScale = 0.93;
+      rotation = quaternionFromTo(new THREE.Vector3(1, 0, 0), normal);
+    } else if (partId === "weight") {
+      desc = RAPIER.ColliderDesc.ball(0.31).setRestitution(0.38).setFriction(0.32);
+      offsetScale = 0.85;
+    }
+
+    if (!desc) return null;
+    const offset = normal.clone().multiplyScalar(offsetScale);
+    desc.setTranslation(offset.x, offset.y * 0.82, offset.z);
+    desc.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w });
+    desc.setMass(colliderMass);
+    desc.setContactSkin(0.01);
+    return desc;
   }
 
   function calcStats(blueprint) {
@@ -611,6 +674,7 @@
 
   function updateBattle(dt) {
     battleTime += dt;
+    updateArenaWalls();
     playerBot.active.clear();
     enemyBot.active.clear();
     updateBot(playerBot, enemyBot, dt);
@@ -628,6 +692,13 @@
       const e = scoreBot(enemyBot);
       els.battleState.textContent = p === e ? "DRAW" : p > e ? "WIN" : "LOSE";
     }
+  }
+
+  function updateArenaWalls() {
+    const enabled = battleTime < 13.5;
+    arenaWallColliders.forEach((collider) => {
+      if (collider.isEnabled() !== enabled) collider.setEnabled(enabled);
+    });
   }
 
   function updateBot(bot, opponent, dt) {
@@ -683,7 +754,11 @@
     const force = vectorFromAngle(forceAngle).multiplyScalar(power);
     const r = vectorFromAngle(mountAngle).multiplyScalar(0.72);
     if (bot.body && !bot.out) {
-      bot.body.applyForce(new CANNON.Vec3(force.x, 0, force.y), new CANNON.Vec3(r.x, 0, r.y));
+      bot.body.addForceAtPoint(
+        { x: force.x, y: 0, z: force.y },
+        { x: bot.pos.x + r.x, y: 0, z: bot.pos.y + r.y },
+        true
+      );
       return;
     }
     bot.vel.add(force.clone().multiplyScalar(dt / bot.stats.mass));
@@ -696,75 +771,89 @@
     const radius = bot.pos.length();
     if (radius > 0.02) {
       const towardCenter = bot.pos.clone().normalize().multiplyScalar(-(0.24 + radius * 0.12) * bot.stats.mass);
-      bot.body.applyForce(new CANNON.Vec3(towardCenter.x, 0, towardCenter.y), new CANNON.Vec3(0, 0, 0));
+      bot.body.addForce({ x: towardCenter.x, y: 0, z: towardCenter.y }, true);
     }
 
     const tilt = Math.min(1.55, Math.max(0, battleTime - 10) * 0.055);
     if (tilt > 0) {
       const tiltAngle = battleTime * 0.72;
-      const tiltForce = new CANNON.Vec3(Math.cos(tiltAngle) * tilt * bot.stats.mass, 0, Math.sin(tiltAngle) * tilt * bot.stats.mass);
-      bot.body.applyForce(tiltForce, new CANNON.Vec3(0, 0, 0));
+      const tiltForce = { x: Math.cos(tiltAngle) * tilt * bot.stats.mass, y: 0, z: Math.sin(tiltAngle) * tilt * bot.stats.mass };
+      bot.body.addForce(tiltForce, true);
     }
 
     const dangerRadius = RIM_RADIUS - Math.min(0.65, Math.max(0, battleTime - 16) * 0.035);
+    const wallsActive = battleTime < 13.5;
     if (radius > dangerRadius) {
       const normal = bot.pos.clone().normalize();
       const outward = bot.vel.dot(normal);
       const slip = Math.max(0, radius - dangerRadius);
-      if (battleTime > 12) {
+      if (!wallsActive) {
         bot.rimTime += (1 + slip * 2.2 + Math.max(0, outward) * 0.5) * dt;
       }
       bot.hp -= (3.6 + slip * 6 + Math.max(0, outward) * 4.1) * dt;
       if (outward > 0.05) {
         const rimForce = normal.multiplyScalar((0.18 + slip * 1.0) * bot.stats.mass);
-        bot.body.applyForce(new CANNON.Vec3(rimForce.x, 0, rimForce.y), new CANNON.Vec3(0, 0, 0));
+        bot.body.addForce({ x: rimForce.x, y: 0, z: rimForce.y }, true);
       }
       addBotSpin(bot, (bot.team === 0 ? -1 : 1) * 0.35 * dt);
     } else {
       bot.rimTime = Math.max(0, bot.rimTime - dt * 2.2);
     }
 
-    if (radius > KO_RADIUS || bot.rimTime > 1.8) {
+    if ((wallsActive && radius > ARENA_RADIUS + 0.65) || (!wallsActive && (radius > KO_RADIUS || bot.rimTime > 1.8))) {
       knockOutBot(bot);
     }
   }
 
   function stepPhysics(dt) {
-    physicsWorld.step(1 / 60, dt, 4);
+    const steps = Math.min(5, Math.max(1, Math.ceil(dt / (1 / 90))));
+    const stepDt = dt / steps;
+    for (let i = 0; i < steps; i += 1) {
+      physicsWorld.timestep = stepDt;
+      physicsWorld.step();
+    }
     syncBotStateFromBody(playerBot, dt);
     syncBotStateFromBody(enemyBot, dt);
   }
 
   function syncBotStateFromBody(bot, dt) {
     if (!bot.body) return;
-    bot.body.position.y = 0;
-    bot.body.velocity.y = 0;
-    const speed = Math.hypot(bot.body.velocity.x, bot.body.velocity.z);
+    const translation = bot.body.translation();
+    const velocity = bot.body.linvel();
+    const speed = Math.hypot(velocity.x, velocity.z);
     if (speed > 7.4) {
       const scale = 7.4 / speed;
-      bot.body.velocity.x *= scale;
-      bot.body.velocity.z *= scale;
+      bot.body.setLinvel({ x: velocity.x * scale, y: 0, z: velocity.z * scale }, true);
+      velocity.x *= scale;
+      velocity.z *= scale;
+    } else if (Math.abs(velocity.y) > 0.0001) {
+      bot.body.setLinvel({ x: velocity.x, y: 0, z: velocity.z }, true);
     }
 
-    bot.pos.set(bot.body.position.x, bot.body.position.z);
-    bot.vel.set(bot.body.velocity.x, bot.body.velocity.z);
-    bot.omega = bot.body.angularVelocity.y;
-    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
+    if (Math.abs(translation.y) > 0.0001) {
+      bot.body.setTranslation({ x: translation.x, y: 0, z: translation.z }, true);
+    }
+
+    bot.pos.set(translation.x, translation.z);
+    bot.vel.set(velocity.x, velocity.z);
+    bot.omega = bot.body.angvel().y;
+    bot.yaw = yawFromQuaternion(bot.body.rotation());
     bot.hp = Math.max(0, bot.hp);
   }
 
   function addBotVelocity(bot, delta) {
     bot.vel.add(delta);
     if (bot.body && !bot.out) {
-      bot.body.velocity.x += delta.x;
-      bot.body.velocity.z += delta.y;
+      const velocity = bot.body.linvel();
+      bot.body.setLinvel({ x: velocity.x + delta.x, y: 0, z: velocity.z + delta.y }, true);
     }
   }
 
   function addBotSpin(bot, delta) {
     bot.omega += delta;
     if (bot.body && !bot.out) {
-      bot.body.angularVelocity.y += delta;
+      const angular = bot.body.angvel();
+      bot.body.setAngvel({ x: 0, y: angular.y + delta, z: 0 }, true);
     }
   }
 
@@ -777,10 +866,10 @@
     bot.vel.add(exitNormal.clone().multiplyScalar(1.7));
     bot.omega += bot.team === 0 ? -2.6 : 2.6;
     if (bot.body) {
-      bot.body.collisionResponse = false;
-      bot.body.position.set(bot.pos.x, 0, bot.pos.y);
-      bot.body.velocity.set(bot.vel.x, 0, bot.vel.y);
-      bot.body.angularVelocity.set(0, bot.omega, 0);
+      bot.colliders.forEach((collider) => collider.setEnabled(false));
+      bot.body.setTranslation({ x: bot.pos.x, y: 0, z: bot.pos.y }, true);
+      bot.body.setLinvel({ x: bot.vel.x, y: 0, z: bot.vel.y }, true);
+      bot.body.setAngvel({ x: 0, y: bot.omega, z: 0 }, true);
     }
   }
 
@@ -989,6 +1078,14 @@
     const y = slot.vertical || 0;
     const horizontal = Math.sqrt(Math.max(0.001, 1 - y * y));
     return new THREE.Vector3(Math.cos(slot.angle) * horizontal, y, Math.sin(slot.angle) * horizontal).normalize();
+  }
+
+  function quaternionFromTo(from, to) {
+    return new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), to.clone().normalize()).normalize();
+  }
+
+  function yawFromQuaternion(q) {
+    return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
   }
 
   function vectorFromAngle(angle) {
