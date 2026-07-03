@@ -442,6 +442,8 @@
       cooldowns: {},
       active: new Set(),
       out: false,
+      outScore: 0,
+      outTime: null,
       rimTime: 0,
       body: null,
       colliders: [],
@@ -860,6 +862,8 @@
   function knockOutBot(bot) {
     if (bot.out) return;
     bot.out = true;
+    bot.outTime = battleTime;
+    bot.outScore = Math.max(0, bot.hp) - bot.pos.length() * 3 - bot.rimTime * 8;
     bot.hp = 0;
     const exitNormal = bot.pos.length() > 0.01 ? bot.pos.clone().normalize() : new THREE.Vector2(bot.team === 0 ? -1 : 1, 0);
     bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
@@ -1020,7 +1024,7 @@
   }
 
   function scoreBot(bot) {
-    if (bot.out) return -1000;
+    if (bot.out) return -1000 + (bot.outTime || 0) + bot.outScore * 0.01;
     return Math.max(0, bot.hp) - bot.pos.length() * 4;
   }
 
