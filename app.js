@@ -1,5 +1,6 @@
 (async function boot() {
   const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
+  const CANNON = await import("https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js");
 
   const TAU = Math.PI * 2;
   const ARENA_RADIUS = 5.18;
@@ -151,6 +152,13 @@
   let battleTime = 0;
   let lastTick = performance.now();
   let idleSpin = 0;
+  let physicsWorld;
+
+  const botPhysicsMaterial = new CANNON.Material("bot");
+  const botContactMaterial = new CANNON.ContactMaterial(botPhysicsMaterial, botPhysicsMaterial, {
+    friction: 0.18,
+    restitution: 0.62
+  });
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -392,11 +400,22 @@
     clearProjectiles();
     if (playerBot) scene.remove(playerBot.group);
     if (enemyBot) scene.remove(enemyBot.group);
+    resetPhysicsWorld();
     playerBot = createBot(playerBlueprint, 0);
     enemyBot = createBot(enemyBlueprint, 1);
     scene.add(playerBot.group, enemyBot.group);
     updateHud();
     els.battleState.textContent = "READY";
+  }
+
+  function resetPhysicsWorld() {
+    physicsWorld = new CANNON.World();
+    physicsWorld.gravity.set(0, 0, 0);
+    physicsWorld.allowSleep = false;
+    physicsWorld.defaultContactMaterial.friction = 0.16;
+    physicsWorld.defaultContactMaterial.restitution = 0.62;
+    physicsWorld.solver.iterations = 10;
+    physicsWorld.addContactMaterial(botContactMaterial);
   }
 
   function createBot(blueprint, team) {
@@ -407,21 +426,42 @@
       stats,
       hp: stats.maxHp,
       pos: new THREE.Vector2(team === 0 ? -2.1 : 2.1, team === 0 ? -0.42 : 0.42),
-      vel: new THREE.Vector2(team === 0 ? 2.36 : -2.36, team === 0 ? 0.42 : -0.42),
+      vel: new THREE.Vector2(team === 0 ? 1.72 : -1.72, team === 0 ? 0.3 : -0.3),
       yaw: team === 0 ? 0 : Math.PI,
       omega: team === 0 ? 1.1 : -1.1,
       cooldowns: {},
       active: new Set(),
       out: false,
       rimTime: 0,
+      body: null,
       group: new THREE.Group(),
       core: null,
       partGroups: {}
     };
     bot.group.userData.bot = bot;
     buildBotMesh(bot);
+    bot.body = createBotBody(bot);
     syncBotMesh(bot, 0);
     return bot;
+  }
+
+  function createBotBody(bot) {
+    const body = new CANNON.Body({
+      angularDamping: 0.62,
+      fixedRotation: false,
+      linearDamping: 0.38,
+      mass: bot.stats.mass,
+      material: botPhysicsMaterial,
+      position: new CANNON.Vec3(bot.pos.x, 0, bot.pos.y),
+      shape: new CANNON.Sphere(0.74)
+    });
+    body.velocity.set(bot.vel.x, 0, bot.vel.y);
+    body.angularVelocity.set(0, bot.omega, 0);
+    body.linearFactor.set(1, 0, 1);
+    body.angularFactor.set(0, 1, 0);
+    body.userData = { bot };
+    physicsWorld.addBody(body);
+    return body;
   }
 
   function calcStats(blueprint) {
@@ -575,8 +615,9 @@
     enemyBot.active.clear();
     updateBot(playerBot, enemyBot, dt);
     updateBot(enemyBot, playerBot, dt);
-    integrateBot(playerBot, dt);
-    integrateBot(enemyBot, dt);
+    applyArenaForces(playerBot, dt);
+    applyArenaForces(enemyBot, dt);
+    stepPhysics(dt);
     updateProjectiles(dt);
     handleBotCollision(dt);
     updateHud();
@@ -604,7 +645,7 @@
       const aimDiff = wrapAngle(toEnemy - mountAngle);
 
       if (partId === "eye") {
-        bot.omega += aimDiff * 4.2 * dt / bot.stats.inertia;
+        addBotSpin(bot, aimDiff * 4.2 * dt / bot.stats.inertia);
         if (Math.abs(aimDiff) < 0.42) bot.active.add(slot.id);
       }
 
@@ -612,7 +653,7 @@
         const pulse = 0.85 + Math.sin(battleTime * 7.5 + slot.angle * 2) * 0.16;
         const mountPower = 1 - Math.abs(slot.vertical || 0) * 0.3;
         const forceAngle = mountAngle + Math.PI;
-        applyForce(bot, forceAngle, 4.4 * pulse * mountPower, mountAngle, dt);
+        applyForce(bot, forceAngle, 3.35 * pulse * mountPower, mountAngle, dt);
         bot.active.add(slot.id);
       }
 
@@ -631,72 +672,116 @@
     });
 
     if (eyeCount === 0) {
-      bot.omega += wrapAngle(toEnemy - bot.yaw) * 0.22 * dt;
+      addBotSpin(bot, wrapAngle(toEnemy - bot.yaw) * 0.22 * dt);
     } else {
-      const seek = vectorFromAngle(toEnemy).multiplyScalar((0.28 + eyeCount * 0.06) * dt);
-      bot.vel.add(seek);
+      const seek = vectorFromAngle(toEnemy).multiplyScalar((0.18 + eyeCount * 0.04) * dt);
+      addBotVelocity(bot, seek);
     }
   }
 
   function applyForce(bot, forceAngle, power, mountAngle, dt) {
     const force = vectorFromAngle(forceAngle).multiplyScalar(power);
-    bot.vel.add(force.clone().multiplyScalar(dt / bot.stats.mass));
     const r = vectorFromAngle(mountAngle).multiplyScalar(0.72);
-    const torque = r.x * force.y - r.y * force.x;
-    bot.omega += (torque * dt) / bot.stats.inertia;
-  }
-
-  function integrateBot(bot, dt) {
-    if (bot.out) {
-      bot.pos.add(bot.vel.clone().multiplyScalar(dt));
-      bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
-      bot.vel.multiplyScalar(Math.exp(-0.45 * dt));
+    if (bot.body && !bot.out) {
+      bot.body.applyForce(new CANNON.Vec3(force.x, 0, force.y), new CANNON.Vec3(r.x, 0, r.y));
       return;
     }
+    bot.vel.add(force.clone().multiplyScalar(dt / bot.stats.mass));
+    addBotSpin(bot, ((r.x * force.y - r.y * force.x) * dt) / bot.stats.inertia);
+  }
 
-    const beforeRadius = bot.pos.length();
-    if (beforeRadius > 0.02) {
-      const towardCenter = bot.pos.clone().normalize().multiplyScalar(-(0.2 + beforeRadius * 0.1));
-      bot.vel.add(towardCenter.multiplyScalar(dt));
-    }
-
-    const tilt = Math.min(0.86, Math.max(0, battleTime - 10) * 0.024);
-    if (tilt > 0) {
-      const tiltAngle = battleTime * 0.72;
-      bot.vel.add(new THREE.Vector2(Math.cos(tiltAngle), Math.sin(tiltAngle)).multiplyScalar(tilt * dt));
-    }
-
-    bot.pos.add(bot.vel.clone().multiplyScalar(dt));
-    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
-    bot.vel.multiplyScalar(Math.exp(-0.74 * dt));
-    bot.omega *= Math.exp(-1.44 * dt);
+  function applyArenaForces(bot, dt) {
+    if (bot.out || !bot.body) return;
 
     const radius = bot.pos.length();
-    if (radius > RIM_RADIUS) {
+    if (radius > 0.02) {
+      const towardCenter = bot.pos.clone().normalize().multiplyScalar(-(0.24 + radius * 0.12) * bot.stats.mass);
+      bot.body.applyForce(new CANNON.Vec3(towardCenter.x, 0, towardCenter.y), new CANNON.Vec3(0, 0, 0));
+    }
+
+    const tilt = Math.min(1.55, Math.max(0, battleTime - 10) * 0.055);
+    if (tilt > 0) {
+      const tiltAngle = battleTime * 0.72;
+      const tiltForce = new CANNON.Vec3(Math.cos(tiltAngle) * tilt * bot.stats.mass, 0, Math.sin(tiltAngle) * tilt * bot.stats.mass);
+      bot.body.applyForce(tiltForce, new CANNON.Vec3(0, 0, 0));
+    }
+
+    const dangerRadius = RIM_RADIUS - Math.min(0.65, Math.max(0, battleTime - 16) * 0.035);
+    if (radius > dangerRadius) {
       const normal = bot.pos.clone().normalize();
       const outward = bot.vel.dot(normal);
-      const slip = Math.max(0, radius - RIM_RADIUS);
+      const slip = Math.max(0, radius - dangerRadius);
       if (battleTime > 12) {
         bot.rimTime += (1 + slip * 2.2 + Math.max(0, outward) * 0.5) * dt;
       }
       bot.hp -= (3.6 + slip * 6 + Math.max(0, outward) * 4.1) * dt;
-      if (outward > 0.05) bot.vel.add(normal.multiplyScalar((0.18 + slip * 1.0) * dt));
-      bot.omega += (bot.team === 0 ? -1 : 1) * 0.35 * dt;
+      if (outward > 0.05) {
+        const rimForce = normal.multiplyScalar((0.18 + slip * 1.0) * bot.stats.mass);
+        bot.body.applyForce(new CANNON.Vec3(rimForce.x, 0, rimForce.y), new CANNON.Vec3(0, 0, 0));
+      }
+      addBotSpin(bot, (bot.team === 0 ? -1 : 1) * 0.35 * dt);
     } else {
       bot.rimTime = Math.max(0, bot.rimTime - dt * 2.2);
     }
 
     if (radius > KO_RADIUS || bot.rimTime > 1.8) {
-      bot.out = true;
-      bot.hp = 0;
-      const exitNormal = bot.pos.clone().normalize();
-      bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
-      bot.vel.add(exitNormal.multiplyScalar(1.7));
-      bot.omega += bot.team === 0 ? -2.6 : 2.6;
+      knockOutBot(bot);
+    }
+  }
+
+  function stepPhysics(dt) {
+    physicsWorld.step(1 / 60, dt, 4);
+    syncBotStateFromBody(playerBot, dt);
+    syncBotStateFromBody(enemyBot, dt);
+  }
+
+  function syncBotStateFromBody(bot, dt) {
+    if (!bot.body) return;
+    bot.body.position.y = 0;
+    bot.body.velocity.y = 0;
+    const speed = Math.hypot(bot.body.velocity.x, bot.body.velocity.z);
+    if (speed > 7.4) {
+      const scale = 7.4 / speed;
+      bot.body.velocity.x *= scale;
+      bot.body.velocity.z *= scale;
     }
 
-    if (bot.vel.length() > 7.4) bot.vel.setLength(7.4);
+    bot.pos.set(bot.body.position.x, bot.body.position.z);
+    bot.vel.set(bot.body.velocity.x, bot.body.velocity.z);
+    bot.omega = bot.body.angularVelocity.y;
+    bot.yaw = wrapAngle(bot.yaw + bot.omega * dt);
     bot.hp = Math.max(0, bot.hp);
+  }
+
+  function addBotVelocity(bot, delta) {
+    bot.vel.add(delta);
+    if (bot.body && !bot.out) {
+      bot.body.velocity.x += delta.x;
+      bot.body.velocity.z += delta.y;
+    }
+  }
+
+  function addBotSpin(bot, delta) {
+    bot.omega += delta;
+    if (bot.body && !bot.out) {
+      bot.body.angularVelocity.y += delta;
+    }
+  }
+
+  function knockOutBot(bot) {
+    if (bot.out) return;
+    bot.out = true;
+    bot.hp = 0;
+    const exitNormal = bot.pos.length() > 0.01 ? bot.pos.clone().normalize() : new THREE.Vector2(bot.team === 0 ? -1 : 1, 0);
+    bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
+    bot.vel.add(exitNormal.clone().multiplyScalar(1.7));
+    bot.omega += bot.team === 0 ? -2.6 : 2.6;
+    if (bot.body) {
+      bot.body.collisionResponse = false;
+      bot.body.position.set(bot.pos.x, 0, bot.pos.y);
+      bot.body.velocity.set(bot.vel.x, 0, bot.vel.y);
+      bot.body.angularVelocity.set(0, bot.omega, 0);
+    }
   }
 
   function fireProjectile(bot, slot, mountAngle) {
@@ -722,7 +807,7 @@
       const targetBot = shot.team === 0 ? enemyBot : playerBot;
       if (shot.pos.distanceTo(targetBot.pos) < 0.76 && targetBot.hp > 0) {
         damageBot(targetBot, shot.damage, angleTo(targetBot.pos, shot.pos));
-        targetBot.vel.add(shot.vel.clone().normalize().multiplyScalar(0.55));
+        addBotVelocity(targetBot, shot.vel.clone().normalize().multiplyScalar(0.55));
         shot.life = 0;
       }
       if (shot.pos.length() > 5.7) shot.life = 0;
@@ -743,15 +828,6 @@
     if (distance >= 1.46) return;
 
     const normal = delta.multiplyScalar(1 / distance);
-    const overlap = 1.46 - distance;
-    playerBot.pos.add(normal.clone().multiplyScalar(-overlap * 0.5));
-    enemyBot.pos.add(normal.clone().multiplyScalar(overlap * 0.5));
-
-    const rel = playerBot.vel.clone().sub(enemyBot.vel);
-    const impact = Math.max(1.05, Math.abs(rel.dot(normal)) + 0.65);
-    playerBot.vel.add(normal.clone().multiplyScalar(-impact * 0.9));
-    enemyBot.vel.add(normal.clone().multiplyScalar(impact * 0.9));
-
     contactDamage(playerBot, enemyBot, normal, dt);
     contactDamage(enemyBot, playerBot, normal.clone().multiplyScalar(-1), dt);
   }
@@ -764,12 +840,12 @@
       const diff = Math.abs(wrapAngle(hitAngle - (attacker.yaw + slot.angle)));
       if (partId === "spike" && diff < 0.72) {
         damage += 18 * dt;
-        defender.vel.add(directionToDefender.clone().multiplyScalar(0.5 * dt));
+        addBotVelocity(defender, directionToDefender.clone().multiplyScalar(0.5 * dt));
         attacker.active.add(slot.id);
       }
       if (partId === "weight" && diff < 0.95) {
         damage += 4 * dt;
-        defender.vel.add(directionToDefender.clone().multiplyScalar(0.25 * dt));
+        addBotVelocity(defender, directionToDefender.clone().multiplyScalar(0.25 * dt));
         attacker.active.add(slot.id);
       }
     });
@@ -830,8 +906,10 @@
     els.playerHp.style.width = `${Math.max(0, (playerBot.hp / playerBot.stats.maxHp) * 100)}%`;
     els.enemyHp.style.width = `${Math.max(0, (enemyBot.hp / enemyBot.stats.maxHp) * 100)}%`;
     els.clock.textContent = battleTime.toFixed(1);
+    const dangerRadius = RIM_RADIUS - Math.min(0.65, Math.max(0, battleTime - 16) * 0.035);
     window.AsyncTankDebug = {
       time: battleTime,
+      dangerRadius,
       player: {
         radius: playerBot.pos.length(),
         hp: playerBot.hp,
@@ -849,6 +927,7 @@
     document.body.dataset.enemyRadius = enemyBot.pos.length().toFixed(3);
     document.body.dataset.playerRim = playerBot.rimTime.toFixed(3);
     document.body.dataset.enemyRim = enemyBot.rimTime.toFixed(3);
+    document.body.dataset.dangerRadius = dangerRadius.toFixed(3);
   }
 
   function scoreBot(bot) {
