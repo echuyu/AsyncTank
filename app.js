@@ -13,7 +13,7 @@
   const MAX_LOGIC = 12;
   const MAX_WIRES = 40;
   const TICK = 1 / 30;
-  const MAX_FIGHT = 60;
+  const MAX_FIGHT = 45;
   const PREFIX = "CBA1:";
   const DIRS = [
     { x: 0, y: -1 },
@@ -38,7 +38,12 @@
     ["enemyNear", "Enemy Near"],
     ["enemyLeft", "Enemy Left"],
     ["enemyRight", "Enemy Right"],
+    ["enemyFront", "Enemy Front"],
+    ["enemyFar", "Enemy Far"],
+    ["gunAligned", "Gun Aligned"],
     ["gunReady", "Gun Ready"],
+    ["wallAhead", "Wall Ahead"],
+    ["bulletIncoming", "Bullet In"],
     ["hitWall", "Hit Wall"],
     ["hitByBullet", "Hit Bullet"],
     ["lowHp", "Low HP"],
@@ -57,14 +62,17 @@
     ["fire", "Fire"],
     ["moveForward", "Forward"],
     ["moveBackward", "Back"],
+    ["orbitLeft", "Orbit L"],
+    ["orbitRight", "Orbit R"],
+    ["stop", "Stop"],
     ["turnLeft", "Turn L"],
     ["turnRight", "Turn R"],
   ];
 
   const LS = {
-    design: "circuit-bot-arena.mvp.design",
-    opponent: "circuit-bot-arena.mvp.opponent",
-    enemyIndex: "circuit-bot-arena.mvp.enemyIndex",
+    design: "circuit-bot-arena.v2.design",
+    opponent: "circuit-bot-arena.v2.opponent",
+    enemyIndex: "circuit-bot-arena.v2.enemyIndex",
   };
 
   const state = {
@@ -79,6 +87,7 @@
     selectedBlockType: "wheel",
     selectedBlockId: null,
     wireFrom: null,
+    selectedWireIndex: null,
     selectedLogicId: null,
     hits: [],
     battle: null,
@@ -112,20 +121,24 @@
   }
 
   function defaultSchematic() {
-    const fireAnd = logic("and", 1, 1, "n_fire_and");
+    const seenReady = logic("and", 1, 1, "n_seen_ready");
+    const fireLock = logic("and", 1, 2, "n_fire_lock");
     return {
-      logicNodes: [fireAnd],
+      logicNodes: [seenReady, fireLock],
       wires: [
         wire("sensor.always", "action.radarSweep"),
-        wire("sensor.always", "action.moveForward"),
         wire("sensor.enemySeen", "action.aimAtEnemy"),
-        wire("sensor.enemySeen", "n_fire_and.in0"),
-        wire("sensor.gunReady", "n_fire_and.in1"),
-        wire("n_fire_and.out", "action.fire"),
-        wire("sensor.enemyLeft", "action.turnLeft"),
-        wire("sensor.enemyRight", "action.turnRight"),
+        wire("sensor.enemySeen", "n_seen_ready.in0"),
+        wire("sensor.gunReady", "n_seen_ready.in1"),
+        wire("n_seen_ready.out", "n_fire_lock.in0"),
+        wire("sensor.gunAligned", "n_fire_lock.in1"),
+        wire("n_fire_lock.out", "action.fire"),
         wire("sensor.enemyNear", "action.moveBackward"),
-        wire("sensor.hitWall", "action.turnRight"),
+        wire("sensor.enemyFar", "action.moveForward"),
+        wire("sensor.enemySeen", "action.orbitRight"),
+        wire("sensor.wallAhead", "action.turnRight"),
+        wire("sensor.bulletIncoming", "action.orbitLeft"),
+        wire("sensor.lowHp", "action.moveBackward"),
       ],
     };
   }
@@ -220,12 +233,6 @@
     return true;
   }
 
-  function endpointColumn(ep) {
-    if (ep.startsWith("sensor.")) return 0;
-    if (ep.startsWith("action.")) return 2;
-    return 1;
-  }
-
   function canConnectEndpoints(from, to, logicNodes) {
     if (from.startsWith("sensor.")) return to.startsWith("action.") || isLogicEndpoint(to);
     if (!isLogicEndpoint(from)) return false;
@@ -303,7 +310,14 @@
   }
 
   function makeEnemies() {
-    const d = defaultSchematic();
+    const targetDummy = normalizeDesign({
+      version: 1,
+      name: "Target Dummy",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("battery", 3, 4),
+      ],
+      schematic: { logicNodes: [], wires: [] },
+    });
     const hunter = normalizeDesign({
       version: 1,
       name: "Basic Hunter",
@@ -311,23 +325,23 @@
         block("core", 3, 3, 0, "core"), block("gun", 3, 2, 1), block("armor", 4, 3, 1),
         block("radar", 2, 3, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("battery", 3, 4),
       ],
-      schematic: d,
+      schematic: defaultSchematic(),
     });
-    const ram = normalizeDesign({
+    const charger = normalizeDesign({
       version: 1,
-      name: "Ram Shooter",
+      name: "Charger",
       blocks: [
         block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("armor", 5, 3, 1),
         block("gun", 3, 2, 1), block("radar", 2, 3), block("wheel", 3, 4), block("wheel", 2, 4), block("wheel", 4, 4),
       ],
       schematic: {
-        logicNodes: [logic("and", 1, 1, "ram_fire")],
+        logicNodes: [logic("and", 1, 1, "ch_fire_a"), logic("and", 1, 2, "ch_fire_b")],
         wires: [
           wire("sensor.always", "action.radarSweep"), wire("sensor.always", "action.moveForward"),
-          wire("sensor.enemySeen", "action.aimAtEnemy"), wire("sensor.enemySeen", "ram_fire.in0"),
-          wire("sensor.gunReady", "ram_fire.in1"), wire("ram_fire.out", "action.fire"),
-          wire("sensor.enemyLeft", "action.turnLeft"), wire("sensor.enemyRight", "action.turnRight"),
-          wire("sensor.hitWall", "action.turnRight"),
+          wire("sensor.enemySeen", "action.aimAtEnemy"), wire("sensor.enemySeen", "ch_fire_a.in0"),
+          wire("sensor.gunReady", "ch_fire_a.in1"), wire("ch_fire_a.out", "ch_fire_b.in0"),
+          wire("sensor.gunAligned", "ch_fire_b.in1"), wire("ch_fire_b.out", "action.fire"),
+          wire("sensor.wallAhead", "action.turnRight"),
         ],
       },
     });
@@ -339,11 +353,13 @@
         block("gun", 4, 2, 1), block("battery", 2, 3), block("battery", 3, 4), block("armor", 2, 4),
       ],
       schematic: {
-        logicNodes: [logic("and", 1, 1, "s_fire"), logic("timer", 1, 2, "s_tick")],
+        logicNodes: [logic("and", 1, 1, "s_fire_a"), logic("and", 1, 2, "s_fire_b"), logic("timer", 1, 3, "s_tick")],
         wires: [
           wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
-          wire("sensor.enemySeen", "s_fire.in0"), wire("sensor.gunReady", "s_fire.in1"), wire("s_fire.out", "action.fire"),
-          wire("sensor.enemyNear", "action.moveBackward"), wire("s_tick.out", "action.turnRight"),
+          wire("sensor.enemySeen", "s_fire_a.in0"), wire("sensor.gunReady", "s_fire_a.in1"),
+          wire("s_fire_a.out", "s_fire_b.in0"), wire("sensor.gunAligned", "s_fire_b.in1"),
+          wire("s_fire_b.out", "action.fire"), wire("sensor.enemyNear", "action.moveBackward"),
+          wire("sensor.enemyFar", "action.stop"), wire("s_tick.out", "action.turnRight"),
         ],
       },
     });
@@ -354,26 +370,46 @@
         block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 4, 3, 1),
         block("wheel", 3, 4), block("wheel", 4, 4), block("armor", 4, 2, 1), block("battery", 2, 3),
       ],
-      schematic: d,
-    });
-    const coward = normalizeDesign({
-      version: 1,
-      name: "Coward",
-      blocks: [
-        block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 2, 3, 3),
-        block("battery", 3, 4), block("battery", 4, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("armor", 3, 1),
-      ],
       schematic: {
-        logicNodes: [logic("and", 1, 1, "c_fire"), logic("or", 1, 2, "c_escape")],
+        logicNodes: [logic("and", 1, 1, "w_fire_a"), logic("and", 1, 2, "w_fire_b")],
         wires: [
-          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
-          wire("sensor.enemySeen", "c_fire.in0"), wire("sensor.gunReady", "c_fire.in1"), wire("c_fire.out", "action.fire"),
-          wire("sensor.enemyNear", "c_escape.in0"), wire("sensor.lowHp", "c_escape.in1"), wire("c_escape.out", "action.moveBackward"),
-          wire("sensor.enemyLeft", "action.turnRight"), wire("sensor.enemyRight", "action.turnLeft"), wire("sensor.hitWall", "action.turnRight"),
+          wire("sensor.always", "action.radarSweep"), wire("sensor.always", "action.moveForward"),
+          wire("sensor.wallAhead", "action.turnRight"), wire("sensor.enemySeen", "action.aimAtEnemy"),
+          wire("sensor.enemySeen", "w_fire_a.in0"), wire("sensor.gunReady", "w_fire_a.in1"),
+          wire("w_fire_a.out", "w_fire_b.in0"), wire("sensor.gunAligned", "w_fire_b.in1"),
+          wire("w_fire_b.out", "action.fire"),
         ],
       },
     });
-    return [hunter, ram, sniper, wallRunner, coward];
+    const dodger = normalizeDesign({
+      version: 1,
+      name: "Dodger",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 2, 3, 3),
+        block("battery", 3, 4), block("wheel", 2, 4), block("wheel", 4, 4), block("wheel", 3, 5), block("armor", 3, 1),
+      ],
+      schematic: {
+        logicNodes: [logic("and", 1, 1, "d_fire_a"), logic("and", 1, 2, "d_fire_b")],
+        wires: [
+          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
+          wire("sensor.enemySeen", "d_fire_a.in0"), wire("sensor.gunReady", "d_fire_a.in1"),
+          wire("d_fire_a.out", "d_fire_b.in0"), wire("sensor.gunAligned", "d_fire_b.in1"), wire("d_fire_b.out", "action.fire"),
+          wire("sensor.enemySeen", "action.orbitLeft"), wire("sensor.bulletIncoming", "action.orbitRight"),
+          wire("sensor.wallAhead", "action.turnRight"),
+        ],
+      },
+    });
+    const armored = normalizeDesign({
+      version: 1,
+      name: "Armored Core",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("armor", 5, 3, 1),
+        block("armor", 4, 2, 1), block("armor", 4, 4, 1), block("gun", 3, 2, 1),
+        block("radar", 2, 3, 3), block("wheel", 2, 4), block("battery", 3, 4),
+      ],
+      schematic: defaultSchematic(),
+    });
+    return [targetDummy, hunter, charger, sniper, wallRunner, dodger, armored];
   }
 
   function resize() {
@@ -453,9 +489,12 @@
     } else if (hit.kind === "portIn") {
       if (state.wireFrom) addWire(state.wireFrom, hit.endpoint);
     } else if (hit.kind === "wireLine") {
-      state.design.schematic.wires.splice(hit.index, 1);
+      if (state.selectedWireIndex === hit.index) {
+        state.design.schematic.wires.splice(hit.index, 1);
+        saveDesign();
+      }
+      state.selectedWireIndex = state.selectedWireIndex === hit.index ? null : hit.index;
       state.wireFrom = null;
-      saveDesign();
     } else if (hit.kind === "logic") {
       state.selectedLogicId = hit.id;
     } else if (hit.kind === "addLogic") {
@@ -569,6 +608,7 @@
     if (existing >= 0) wires.splice(existing, 1);
     else if (wires.length < MAX_WIRES) wires.push({ from, to });
     state.wireFrom = null;
+    state.selectedWireIndex = null;
     saveDesign();
   }
 
@@ -576,18 +616,25 @@
     state.fightOpponent = normalizeDesign(opponent || state.enemies[state.enemyIndex]);
     const arena = fightArena();
     const seed = hashString(JSON.stringify(state.design) + JSON.stringify(state.fightOpponent));
+    const rng = mulberry32(seed);
+    const obstacles = makeObstacles(arena, rng);
+    const playerPos = startSpot(arena, obstacles, 0.2, rng);
+    const enemyPos = startSpot(arena, obstacles, 0.8, rng);
+    const playerAngle = Math.atan2(enemyPos.y - playerPos.y, enemyPos.x - playerPos.x) + (rng() - 0.5) * 0.7;
+    const enemyAngle = Math.atan2(playerPos.y - enemyPos.y, playerPos.x - enemyPos.x) + (rng() - 0.5) * 0.7;
     state.battle = {
       t: 0,
       acc: 0,
       seed,
-      rng: mulberry32(seed),
+      rng,
       result: "",
       reason: "",
       arena,
+      obstacles,
       bullets: [],
       particles: [],
-      player: makeBattleBot(state.design, "P", arena.x + arena.w * 0.23, arena.y + arena.h * 0.5, 0, seed ^ 0x1234),
-      enemy: makeBattleBot(state.fightOpponent, "E", arena.x + arena.w * 0.77, arena.y + arena.h * 0.5, Math.PI, seed ^ 0xabcd),
+      player: makeBattleBot(state.design, "P", playerPos.x, playerPos.y, playerAngle, seed ^ 0x1234),
+      enemy: makeBattleBot(state.fightOpponent, "E", enemyPos.x, enemyPos.y, enemyAngle, seed ^ 0xabcd),
     };
     state.mode = "fight";
     syncShareLayer();
@@ -620,13 +667,31 @@
       gunCooldown: 0,
       hitWallT: 0,
       hitBulletT: 0,
+      wallAheadT: 0,
       lastSeenT: 0,
       lastSeenAngle: angle,
       lastSeenDist: 9999,
       sensors: {},
+      prevSensors: {},
       actions: {},
       logicMemory: {},
       rand: mulberry32(seed),
+      pulse: {},
+      report: {
+        shots: 0,
+        hits: 0,
+        damageDealt: 0,
+        damageTaken: 0,
+        blocksLost: 0,
+        coreHits: 0,
+        wastedShots: 0,
+        lockShots: 0,
+        enemySeenTicks: 0,
+        nearTicks: 0,
+        wallTicks: 0,
+        bulletIncomingTicks: 0,
+        dodgeTicks: 0,
+      },
       defeated: false,
     };
     recalcBotStats(bot);
@@ -645,10 +710,10 @@
     };
     bot.maxEnergy = BLOCKS.core.energy + bot.stats.batteries * BLOCKS.battery.energy;
     bot.regen = BLOCKS.core.regen + bot.stats.batteries * BLOCKS.battery.regen;
-    bot.speed = 26 + bot.stats.wheels * 31;
-    bot.turn = 1.0 + bot.stats.wheels * 0.32;
-    bot.radarRange = bot.stats.radars ? 210 + bot.stats.radars * 45 : 0;
-    bot.radarFov = bot.stats.radars ? 0.48 + bot.stats.radars * 0.07 : 0;
+    bot.speed = 20 + bot.stats.wheels * 34;
+    bot.turn = 0.9 + bot.stats.wheels * 0.36;
+    bot.radarRange = bot.stats.radars ? 285 + bot.stats.radars * 55 : 0;
+    bot.radarFov = bot.stats.radars ? 0.38 + bot.stats.radars * 0.055 : 0;
     bot.gunCooldownMax = Math.max(0.34, 0.82 - bot.stats.guns * 0.08);
   }
 
@@ -680,7 +745,9 @@
       bot.gunCooldown = Math.max(0, bot.gunCooldown - dt);
       bot.hitWallT = Math.max(0, bot.hitWallT - dt);
       bot.hitBulletT = Math.max(0, bot.hitBulletT - dt);
+      bot.wallAheadT = Math.max(0, bot.wallAheadT - dt);
       bot.lastSeenT = Math.max(0, bot.lastSeenT - dt);
+      for (const key of Object.keys(bot.pulse)) bot.pulse[key] = Math.max(0, bot.pulse[key] - dt);
       for (const bl of bot.blocks) bl.flash = Math.max(0, bl.flash - dt * 5);
       recalcBotStats(bot);
     }
@@ -714,20 +781,61 @@
     }
     const seenOrMemory = seen || bot.lastSeenT > 0;
     const side = angleDiff(bot.lastSeenAngle, bot.bodyAngle);
+    const turretDiff = Math.abs(angleDiff(bot.turretAngle, bot.lastSeenAngle));
     const hp = totalHp(bot);
     const maxHp = bot.blocks.reduce((sum, bl) => sum + bl.maxHp, 0);
-    bot.sensors = {
+    const incoming = bulletIncoming(bot, battle);
+    const wallAhead = wallAheadCheck(bot, battle);
+    const nextSensors = {
       always: true,
       enemySeen: seen,
-      enemyNear: seen && dist < 150,
+      enemyNear: seenOrMemory && bot.lastSeenDist < 145,
+      enemyFar: seenOrMemory && bot.lastSeenDist > 190,
       enemyLeft: seenOrMemory && side < -0.12,
       enemyRight: seenOrMemory && side > 0.12,
+      enemyFront: seenOrMemory && Math.abs(side) < 0.35,
+      gunAligned: seenOrMemory && turretDiff < 0.18,
       gunReady: bot.stats.guns > 0 && bot.gunCooldown <= 0 && bot.energy >= fireCost(bot),
+      wallAhead,
+      bulletIncoming: incoming,
       hitWall: bot.hitWallT > 0,
       hitByBullet: bot.hitBulletT > 0,
       lowHp: coreHp(bot) < BLOCKS.core.hp * 0.45 || hp < maxHp * 0.45,
       lowEnergy: bot.energy < bot.maxEnergy * 0.28,
     };
+    for (const key of ["enemySeen", "gunAligned", "bulletIncoming", "wallAhead"]) {
+      if (nextSensors[key] && !bot.prevSensors[key]) bot.pulse[key] = 0.42;
+    }
+    bot.sensors = nextSensors;
+    bot.prevSensors = { ...nextSensors };
+    if (seen) bot.report.enemySeenTicks += 1;
+    if (nextSensors.enemyNear) bot.report.nearTicks += 1;
+    if (nextSensors.wallAhead || nextSensors.hitWall) bot.report.wallTicks += 1;
+    if (nextSensors.bulletIncoming) bot.report.bulletIncomingTicks += 1;
+  }
+
+  function bulletIncoming(bot, battle) {
+    for (const bullet of battle.bullets) {
+      if (bullet.owner === bot.id) continue;
+      const dx = bot.x - bullet.x;
+      const dy = bot.y - bullet.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 95) continue;
+      const speed = Math.hypot(bullet.vx, bullet.vy) || 1;
+      const toward = (dx * bullet.vx + dy * bullet.vy) / (dist * speed || 1);
+      if (toward > 0.55) return true;
+    }
+    return false;
+  }
+
+  function wallAheadCheck(bot, battle) {
+    const r = botRadius(bot, battle) * 0.55;
+    const look = 44 + bot.stats.wheels * 10;
+    const x = bot.x + Math.cos(bot.bodyAngle) * look;
+    const y = bot.y + Math.sin(bot.bodyAngle) * look;
+    const ar = battle.arena;
+    if (x - r < ar.x || y - r < ar.y || x + r > ar.x + ar.w || y + r > ar.y + ar.h) return true;
+    return battle.obstacles.some((o) => circleRectOverlap(x, y, r, o));
   }
 
   function evaluateSchematic(bot, battle, dt) {
@@ -735,6 +843,7 @@
     const values = {};
     for (const [id] of SENSORS) values[`sensor.${id}`] = !!bot.sensors[id];
     const inputValue = (endpoint) => s.wires.some((w) => w.to === endpoint && values[w.from]);
+    const hasInput = (endpoint) => s.wires.some((w) => w.to === endpoint);
     for (const node of s.logicNodes) {
       const key = node.id;
       const info = LOGIC_TYPES[node.type];
@@ -744,7 +853,7 @@
       } else if (node.type === "or") {
         value = inputValue(`${key}.in0`) || inputValue(`${key}.in1`);
       } else if (node.type === "not") {
-        value = !inputValue(`${key}.in0`);
+        value = hasInput(`${key}.in0`) && !inputValue(`${key}.in0`);
       } else if (node.type === "timer") {
         const period = 1.05;
         value = (battle.t % period) < 0.18;
@@ -767,28 +876,58 @@
 
   function applyActions(bot, battle, dt) {
     const a = bot.actions;
-    const move = (a.moveForward ? 1 : 0) - (a.moveBackward ? 1 : 0);
     const turn = (a.turnRight ? 1 : 0) - (a.turnLeft ? 1 : 0);
     bot.bodyAngle = normAngle(bot.bodyAngle + turn * bot.turn * dt);
-    if (move) {
-      bot.x += Math.cos(bot.bodyAngle) * bot.speed * move * dt;
-      bot.y += Math.sin(bot.bodyAngle) * bot.speed * move * dt;
+    let moveAngle = null;
+    let speedScale = 1;
+    if (a.stop) {
+      moveAngle = null;
+    } else if (a.moveBackward) {
+      moveAngle = bot.bodyAngle + Math.PI;
+      speedScale = 0.72;
+    } else if ((a.orbitLeft || a.orbitRight) && bot.lastSeenT > 0) {
+      moveAngle = bot.lastSeenAngle + (a.orbitLeft ? -Math.PI / 2 : Math.PI / 2);
+      speedScale = 0.82;
+      if (bot.sensors.bulletIncoming) bot.report.dodgeTicks += 1;
+      bot.bodyAngle = approachAngle(bot.bodyAngle, moveAngle, bot.turn * dt * 0.55);
+    } else if (a.moveForward) {
+      moveAngle = bot.bodyAngle;
+    }
+    const ox = bot.x;
+    const oy = bot.y;
+    if (moveAngle != null) {
+      bot.x += Math.cos(moveAngle) * bot.speed * speedScale * dt;
+      bot.y += Math.sin(moveAngle) * bot.speed * speedScale * dt;
     }
     const ar = battle.arena;
     const margin = botRadius(bot, battle);
-    const ox = bot.x;
-    const oy = bot.y;
+    const tx = bot.x;
+    const ty = bot.y;
     bot.x = clamp(bot.x, ar.x + margin, ar.x + ar.w - margin);
     bot.y = clamp(bot.y, ar.y + margin, ar.y + ar.h - margin);
-    if (Math.abs(bot.x - ox) > 0.01 || Math.abs(bot.y - oy) > 0.01) bot.hitWallT = 0.36;
+    let blocked = Math.abs(bot.x - tx) > 0.01 || Math.abs(bot.y - ty) > 0.01;
+    if (!blocked) {
+      const r = margin * 0.58;
+      for (const o of battle.obstacles) {
+        if (circleRectOverlap(bot.x, bot.y, r, o)) {
+          blocked = true;
+          break;
+        }
+      }
+    }
+    if (blocked) {
+      bot.x = ox;
+      bot.y = oy;
+      bot.hitWallT = 0.42;
+      bot.wallAheadT = 0.42;
+    }
 
     if (bot.stats.radars > 0) {
       if (a.radarSweep) {
         if (bot.sensors.enemySeen || bot.lastSeenT > 0) {
           bot.radarAngle = approachAngle(bot.radarAngle, bot.lastSeenAngle, 5.2 * dt);
         } else {
-          bot.radarAngle = normAngle(bot.radarAngle + bot.radarDir * 2.8 * dt);
-          if (Math.abs(angleDiff(bot.radarAngle, bot.bodyAngle)) > 1.35) bot.radarDir *= -1;
+          bot.radarAngle = normAngle(bot.radarAngle + bot.radarDir * 4.1 * dt);
         }
       } else {
         bot.radarAngle = approachAngle(bot.radarAngle, bot.bodyAngle, 2 * dt);
@@ -796,27 +935,35 @@
     }
     if (a.aimAtEnemy && bot.lastSeenT > 0) bot.turretAngle = approachAngle(bot.turretAngle, bot.lastSeenAngle, 5.8 * dt);
     else bot.turretAngle = approachAngle(bot.turretAngle, bot.bodyAngle, 1.2 * dt);
-    const aimed = bot.lastSeenT > 0 && Math.abs(angleDiff(bot.turretAngle, bot.lastSeenAngle)) < 0.22;
-    if (a.fire && bot.sensors.gunReady && aimed) fireBullet(bot, battle);
+    const aimed = bot.lastSeenT > 0 && Math.abs(angleDiff(bot.turretAngle, bot.lastSeenAngle)) < 0.18;
+    if (a.fire && bot.sensors.gunReady) fireBullet(bot, battle, aimed);
   }
 
-  function fireBullet(bot, battle) {
+  function fireBullet(bot, battle, aimed) {
     const gun = bot.blocks.find((bl) => bl.alive && bl.type === "gun");
     if (!gun) return;
     const pos = blockWorld(bot, gun, battleScale(battle));
     const speed = 360;
     const dmg = 10 + Math.max(0, bot.stats.guns - 1) * 2;
     const cost = fireCost(bot);
+    const spread = aimed ? (bot.rand() - 0.5) * 0.05 : (bot.rand() - 0.5) * 0.9;
+    const angle = normAngle(bot.turretAngle + spread);
     bot.energy -= cost;
     bot.gunCooldown = bot.gunCooldownMax;
+    bot.pulse.fire = 0.28;
+    bot.report.shots += 1;
+    if (aimed) bot.report.lockShots += 1;
+    else bot.report.wastedShots += 1;
     battle.bullets.push({
-      x: pos.x + Math.cos(bot.turretAngle) * 16,
-      y: pos.y + Math.sin(bot.turretAngle) * 16,
-      vx: Math.cos(bot.turretAngle) * speed,
-      vy: Math.sin(bot.turretAngle) * speed,
+      x: pos.x + Math.cos(angle) * 16,
+      y: pos.y + Math.sin(angle) * 16,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
       owner: bot.id,
       damage: dmg,
       ttl: 2.8,
+      trail: [{ x: pos.x, y: pos.y }],
+      aimed,
     });
     spawnSpark(pos.x, pos.y, battle, 4);
   }
@@ -829,14 +976,21 @@
     const next = [];
     for (const bullet of battle.bullets) {
       bullet.ttl -= dt;
+      bullet.trail.push({ x: bullet.x, y: bullet.y });
+      if (bullet.trail.length > 8) bullet.trail.shift();
       bullet.x += bullet.vx * dt;
       bullet.y += bullet.vy * dt;
       const ar = battle.arena;
       if (bullet.ttl <= 0 || bullet.x < ar.x || bullet.y < ar.y || bullet.x > ar.x + ar.w || bullet.y > ar.y + ar.h) continue;
+      const obstacle = battle.obstacles.find((o) => pointInRect(bullet.x, bullet.y, o));
+      if (obstacle) {
+        spawnSpark(bullet.x, bullet.y, battle, 5);
+        continue;
+      }
       const target = bullet.owner === "P" ? battle.enemy : battle.player;
       const hit = bulletHitBlock(target, bullet, battle);
       if (hit) {
-        damageBlock(target, hit, bullet.damage, battle);
+        damageBlock(target, hit, bullet.damage, battle, bullet.owner);
         spawnSpark(bullet.x, bullet.y, battle, 10);
         continue;
       }
@@ -858,12 +1012,30 @@
     return best?.bl || null;
   }
 
-  function damageBlock(bot, bl, amount, battle) {
+  function pointInRect(x, y, r) {
+    return x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h;
+  }
+
+  function circleRectOverlap(cx, cy, radius, r) {
+    const x = clamp(cx, r.x, r.x + r.w);
+    const y = clamp(cy, r.y, r.y + r.h);
+    return Math.hypot(cx - x, cy - y) <= radius;
+  }
+
+  function damageBlock(bot, bl, amount, battle, attackerId) {
+    const attacker = attackerId === "P" ? battle.player : battle.enemy;
     bl.hp -= amount;
     bl.flash = 1;
     bot.hitBulletT = 0.45;
+    bot.report.damageTaken += amount;
+    if (attacker && attacker !== bot) {
+      attacker.report.damageDealt += amount;
+      attacker.report.hits += 1;
+    }
+    if (bl.type === "core") bot.report.coreHits += 1;
     if (bl.hp <= 0 && bl.alive) {
       bl.alive = false;
+      bot.report.blocksLost += 1;
       const p = blockWorld(bot, bl, battleScale(battle));
       spawnBreak(p.x, p.y, battle, bl.type === "core" ? 24 : 12);
     }
@@ -874,7 +1046,30 @@
     if (!b || b.result) return;
     b.result = result;
     b.reason = reason;
+    b.analysis = resultAnalysis(b);
     spawnBreak(state.w / 2, state.h * 0.36, b, 28);
+  }
+
+  function resultAnalysis(battle) {
+    const p = battle.player.report;
+    const accuracy = p.shots ? Math.round((p.hits / p.shots) * 100) : 0;
+    const notes = [];
+    if (p.enemySeenTicks < battle.t * 8) notes.push("NO RADAR LOCK");
+    if (p.shots >= 3 && p.wastedShots > p.lockShots) notes.push("WASTED SHOTS");
+    if (p.nearTicks > battle.t * 13) notes.push("TOO CLOSE");
+    if (p.wallTicks > battle.t * 7) notes.push("WALL STUCK");
+    if (p.coreHits >= 2) notes.push("CORE EXPOSED");
+    if (p.bulletIncomingTicks > 8 && p.dodgeTicks > 5) notes.push("GOOD DODGE");
+    if (p.lockShots >= Math.max(2, p.wastedShots * 2)) notes.push("GOOD LOCK");
+    if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE WIRE");
+    return {
+      damageDealt: Math.round(p.damageDealt),
+      damageTaken: Math.round(p.damageTaken),
+      accuracy,
+      blocksLost: p.blocksLost,
+      coreHp: Math.round(coreHp(battle.player)),
+      notes: notes.slice(0, 2),
+    };
   }
 
   function fightArena() {
@@ -884,8 +1079,35 @@
     return { x: pad, y: top, w: state.w - pad * 2, h: bottom - top };
   }
 
+  function makeObstacles(arena, rng) {
+    const base = [
+      { x: 0.45, y: 0.16, w: 0.1, h: 0.2 },
+      { x: 0.25, y: 0.58, w: 0.15, h: 0.09 },
+      { x: 0.63, y: 0.6, w: 0.12, h: 0.16 },
+    ];
+    if (arena.h > 430) base.push({ x: 0.44, y: 0.78, w: 0.12, h: 0.08 });
+    return base.map((o, i) => ({
+      x: Math.round(arena.x + arena.w * o.x + (rng() - 0.5) * 14),
+      y: Math.round(arena.y + arena.h * o.y + (rng() - 0.5) * 14),
+      w: Math.round(arena.w * o.w),
+      h: Math.round(arena.h * o.h),
+      id: i,
+    }));
+  }
+
+  function startSpot(arena, obstacles, xFrac, rng) {
+    for (let i = 0; i < 18; i += 1) {
+      const p = {
+        x: arena.x + arena.w * xFrac,
+        y: arena.y + arena.h * (0.18 + rng() * 0.64),
+      };
+      if (!obstacles.some((o) => circleRectOverlap(p.x, p.y, 34, o))) return p;
+    }
+    return { x: arena.x + arena.w * xFrac, y: arena.y + arena.h * (xFrac < 0.5 ? 0.26 : 0.74) };
+  }
+
   function battleScale(battle) {
-    return clamp(Math.floor(battle.arena.w / 27), 11, 17);
+    return clamp(Math.floor(battle.arena.w / 23), 13, 20);
   }
 
   function blockWorld(bot, bl, scale) {
@@ -1010,6 +1232,7 @@
     drawBuildGrid(l);
     drawBuildPalette(l);
     drawBuildActions(l);
+    drawBuildStats(l);
   }
 
   function buildLayout() {
@@ -1081,6 +1304,50 @@
     }
   }
 
+  function drawBuildStats(l) {
+    const y0 = l.actionY + 56;
+    if (y0 > state.h - 24) return;
+    const s = designStats(state.design);
+    const items = [
+      ["SPD", s.speed / 150],
+      ["TURN", s.turn / 3.1],
+      ["RADAR", s.radar / 310],
+      ["FIRE", s.fire / 3.2],
+      ["ENERGY", s.energy / 150],
+      ["ARMOR", s.armor / 120],
+    ];
+    const w = Math.floor((state.w - 28) / 2);
+    for (let i = 0; i < items.length; i += 1) {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = 14 + col * w;
+      const y = y0 + row * 18;
+      text(items[i][0], x, y + 5, 9, "left");
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 48, y, w - 58, 10);
+      ctx.fillStyle = INK;
+      ctx.fillRect(x + 50, y + 2, (w - 62) * clamp(items[i][1], 0, 1), 6);
+    }
+  }
+
+  function designStats(design) {
+    const count = (type) => design.blocks.filter((b) => b.type === type).length;
+    const wheels = count("wheel");
+    const guns = count("gun");
+    const radars = count("radar");
+    const batteries = count("battery");
+    const armor = count("armor");
+    return {
+      speed: 20 + wheels * 34,
+      turn: 0.9 + wheels * 0.36,
+      radar: radars ? 165 + radars * 42 : 0,
+      fire: guns ? 1 / Math.max(0.34, 0.82 - guns * 0.08) + guns * 0.25 : 0,
+      energy: BLOCKS.core.energy + batteries * BLOCKS.battery.energy,
+      armor: armor * BLOCKS.armor.hp,
+    };
+  }
+
   function drawWire() {
     const l = wireLayout();
     text("ONE SCHEMATIC", 16, 54, 15, "left");
@@ -1149,8 +1416,9 @@
       const a = endpointPoint(wires[i].from, l);
       const b = endpointPoint(wires[i].to, l);
       const active = signalValue(wires[i].from);
-      ctx.strokeStyle = active ? INK : "#999";
-      ctx.lineWidth = active ? 5 : 2;
+      const selected = state.selectedWireIndex === i;
+      ctx.strokeStyle = selected || active ? INK : "#999";
+      ctx.lineWidth = selected ? 6 : active ? 5 : 2;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       const mid = (a.x + b.x) / 2;
@@ -1165,6 +1433,8 @@
       ctx.fillStyle = INK;
       ctx.fillRect(p.x - 5, p.y - 5, 10, 10);
       text("TO?", state.w / 2, state.h - 26, 14, "center");
+    } else if (state.selectedWireIndex != null) {
+      text("WIRE SELECTED", state.w / 2, state.h - 26, 12, "center");
     }
   }
 
@@ -1243,6 +1513,15 @@
     ctx.strokeStyle = INK;
     ctx.lineWidth = 4;
     ctx.strokeRect(ar.x, ar.y, ar.w, ar.h);
+    for (const o of b.obstacles) {
+      ctx.fillStyle = PAPER;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 4;
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.strokeRect(o.x, o.y, o.w, o.h);
+      ctx.fillStyle = "#ddd";
+      for (let x = o.x + 6; x < o.x + o.w - 4; x += 10) ctx.fillRect(x, o.y + 6, 5, 5);
+    }
     for (let x = ar.x + 18; x < ar.x + ar.w; x += 28) {
       ctx.fillStyle = PALE;
       ctx.fillRect(x, ar.y + ar.h / 2, 8, 2);
@@ -1263,11 +1542,11 @@
 
   function drawRadarCone(bot, battle) {
     ctx.save();
-    ctx.globalAlpha = 0.14;
+    ctx.globalAlpha = 0.09;
     ctx.fillStyle = INK;
     ctx.beginPath();
     ctx.moveTo(bot.x, bot.y);
-    ctx.arc(bot.x, bot.y, Math.min(bot.radarRange, battle.arena.w * 0.75), bot.radarAngle - bot.radarFov, bot.radarAngle + bot.radarFov);
+    ctx.arc(bot.x, bot.y, Math.min(bot.radarRange, battle.arena.w * 0.62), bot.radarAngle - bot.radarFov, bot.radarAngle + bot.radarFov);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -1290,8 +1569,19 @@
   }
 
   function drawBullets(battle) {
-    ctx.fillStyle = INK;
-    for (const bullet of battle.bullets) ctx.fillRect(bullet.x - 3, bullet.y - 3, 6, 6);
+    for (const bullet of battle.bullets) {
+      ctx.strokeStyle = bullet.aimed ? INK : "#777";
+      ctx.lineWidth = bullet.aimed ? 3 : 2;
+      ctx.beginPath();
+      for (let i = 0; i < bullet.trail.length; i += 1) {
+        const p = bullet.trail[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = INK;
+      ctx.fillRect(bullet.x - 3, bullet.y - 3, 6, 6);
+    }
   }
 
   function drawParticles(battle) {
@@ -1316,13 +1606,20 @@
     addHit("build", state.w - 154, y, 68, 34);
     addHit("share", state.w - 78, y, 68, 34);
     if (b.result) {
+      const info = b.analysis || resultAnalysis(b);
       ctx.fillStyle = PAPER;
       ctx.strokeStyle = INK;
       ctx.lineWidth = 5;
-      ctx.fillRect(state.w / 2 - 98, state.h * 0.36 - 48, 196, 96);
-      ctx.strokeRect(state.w / 2 - 98, state.h * 0.36 - 48, 196, 96);
-      text(b.result, state.w / 2, state.h * 0.36 - 10, 34, "center");
-      text(b.reason, state.w / 2, state.h * 0.36 + 25, 13, "center");
+      const px = state.w / 2 - 126;
+      const py = state.h * 0.28;
+      ctx.fillRect(px, py, 252, 154);
+      ctx.strokeRect(px, py, 252, 154);
+      text(b.result, state.w / 2, py + 25, 30, "center");
+      text(b.reason, state.w / 2, py + 51, 12, "center");
+      text(`DMG ${info.damageDealt} / TAKEN ${info.damageTaken}`, state.w / 2, py + 76, 11, "center");
+      text(`ACC ${info.accuracy}%  LOST ${info.blocksLost}  CORE ${info.coreHp}`, state.w / 2, py + 96, 11, "center");
+      text(info.notes[0] || "", state.w / 2, py + 120, 13, "center");
+      text(info.notes[1] || "", state.w / 2, py + 139, 13, "center");
     }
   }
 
@@ -1344,23 +1641,39 @@
 
   function drawMiniCircuit(b) {
     const x = 12;
-    const y = state.h - 94;
+    const y = state.h - 112;
+    text("SIGNAL", x, y - 9, 9, "left");
     const items = [
       ["SEE", b.player.sensors.enemySeen],
-      ["GUN", b.player.sensors.gunReady],
+      ["NEAR", b.player.sensors.enemyNear],
+      ["FAR", b.player.sensors.enemyFar],
+      ["LOCK", b.player.sensors.gunAligned],
+      ["WALL", b.player.sensors.wallAhead],
+      ["DODGE", b.player.sensors.bulletIncoming],
       ["AIM", b.player.actions.aimAtEnemy],
-      ["FIRE", b.player.actions.fire],
-      ["MOVE", b.player.actions.moveForward || b.player.actions.moveBackward],
+      ["FIRE", b.player.pulse.fire > 0 || b.player.actions.fire],
+      ["ORB", b.player.actions.orbitLeft || b.player.actions.orbitRight],
+      ["BACK", b.player.actions.moveBackward],
     ];
     let px = x;
     for (const [label, on] of items) {
       ctx.fillStyle = on ? INK : PAPER;
       ctx.strokeStyle = INK;
       ctx.lineWidth = 2;
-      ctx.fillRect(px, y, 44, 20);
-      ctx.strokeRect(px, y, 44, 20);
-      text(label, px + 22, y + 11, 8, "center", on ? PAPER : INK);
-      px += 48;
+      ctx.fillRect(px, y, 35, 18);
+      ctx.strokeRect(px, y, 35, 18);
+      text(label, px + 17, y + 10, label.length > 4 ? 6 : 7, "center", on ? PAPER : INK);
+      px += 37;
+    }
+    const pulses = [];
+    if (b.player.pulse.enemySeen > 0) pulses.push("SEE");
+    if (b.player.pulse.gunAligned > 0) pulses.push("LOCK");
+    if (b.player.pulse.bulletIncoming > 0) pulses.push("DODGE");
+    if (b.player.pulse.fire > 0) pulses.push("FIRE");
+    if (pulses.length) {
+      ctx.fillStyle = INK;
+      ctx.fillRect(state.w / 2 - 52, 92, 104, 28);
+      text(pulses[0], state.w / 2, 107, 16, "center", PAPER);
     }
   }
 
