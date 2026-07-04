@@ -3,252 +3,251 @@
 
   const canvas = document.querySelector("#game");
   const ctx = canvas.getContext("2d");
+
   const INK = "#111";
   const PAPER = "#f8f8f8";
   const PALE = "#ddd";
-  const GRID_W = 11;
-  const GRID_H = 7;
-  const CORE_X = 5;
-  const CORE_Y = 3;
-  const MAX_PARTS = 8;
-  const MAX_FIGHT = 15;
+  const GRID = 7;
+  const CORE = 3;
+  const MAX_BLOCKS = 13;
+  const MAX_LOGIC = 12;
+  const MAX_WIRES = 40;
+  const TICK = 1 / 30;
+  const MAX_FIGHT = 60;
+  const PREFIX = "CBA1:";
   const DIRS = [
     { x: 0, y: -1 },
     { x: 1, y: 0 },
     { x: 0, y: 1 },
     { x: -1, y: 0 },
   ];
-  const MIRROR_ROT = [0, 3, 2, 1];
 
-  const PARTS = {
-    core: { hp: 20, mass: 5 },
-    leg: { hp: 6, mass: 1.1, drive: 230 },
-    wheel: { hp: 5, mass: 0.75, drive: 310 },
-    spike: { hp: 5, mass: 1.2 },
-    shield: { hp: 16, mass: 2.8 },
-    hammer: { hp: 8, mass: 2.1 },
-    weight: { hp: 18, mass: 4.4 },
-    wing: { hp: 5, mass: 0.45, lift: 24 },
-    spring: { hp: 6, mass: 0.9 },
-    bomb: { hp: 4, mass: 1.35 },
-    jaw: { hp: 8, mass: 1.4 },
+  const BLOCKS = {
+    core: { hp: 42, label: "CORE", mass: 4, energy: 50, regen: 5 },
+    wheel: { hp: 14, label: "WHEEL", mass: 1, energy: 0, regen: 0 },
+    gun: { hp: 22, label: "GUN", mass: 1.5, energy: 0, regen: 0 },
+    radar: { hp: 12, label: "RADAR", mass: 1, energy: 0, regen: 0 },
+    armor: { hp: 30, label: "ARMOR", mass: 3, energy: 0, regen: 0 },
+    battery: { hp: 16, label: "BATT", mass: 1.4, energy: 34, regen: 5 },
   };
+  const PALETTE = ["wheel", "gun", "radar", "armor", "battery"];
 
-  const TRAY = ["leg", "wheel", "spike", "shield", "hammer", "weight", "bomb"];
+  const SENSORS = [
+    ["always", "Always"],
+    ["enemySeen", "Enemy Seen"],
+    ["enemyNear", "Enemy Near"],
+    ["enemyLeft", "Enemy Left"],
+    ["enemyRight", "Enemy Right"],
+    ["gunReady", "Gun Ready"],
+    ["hitWall", "Hit Wall"],
+    ["hitByBullet", "Hit Bullet"],
+    ["lowHp", "Low HP"],
+    ["lowEnergy", "Low Energy"],
+  ];
+  const LOGIC_TYPES = {
+    and: { label: "AND", inputs: 2 },
+    or: { label: "OR", inputs: 2 },
+    not: { label: "NOT", inputs: 1 },
+    timer: { label: "TIMER", inputs: 0 },
+    random: { label: "RND", inputs: 0 },
+  };
+  const ACTIONS = [
+    ["radarSweep", "Radar Sweep"],
+    ["aimAtEnemy", "Aim Enemy"],
+    ["fire", "Fire"],
+    ["moveForward", "Forward"],
+    ["moveBackward", "Back"],
+    ["turnLeft", "Turn L"],
+    ["turnRight", "Turn R"],
+  ];
+
   const LS = {
-    build: "eggcore.toy.build",
-    defense: "eggcore.toy.defense",
-    logs: "eggcore.toy.logs",
+    design: "circuit-bot-arena.mvp.design",
+    opponent: "circuit-bot-arena.mvp.opponent",
+    enemyIndex: "circuit-bot-arena.mvp.enemyIndex",
   };
 
   const state = {
     w: 390,
     h: 760,
     dpr: 1,
-    mode: "garage",
-    selectedType: "leg",
-    selectedRot: 2,
-    selectedPartId: null,
-    hoverCell: null,
-    pointer: null,
-    build: loadBuild() || defaultBuild(),
+    mode: "build",
+    design: null,
+    opponent: null,
     enemies: [],
     enemyIndex: 0,
-    battle: null,
+    selectedBlockType: "wheel",
+    selectedBlockId: null,
+    wireFrom: null,
+    selectedLogicId: null,
     hits: [],
+    battle: null,
+    fightOpponent: null,
     toast: "",
     toastT: 0,
-    logs: loadLogs(),
+    importText: "",
+    exportText: "",
+    lastSignals: {},
   };
+
+  const shareLayer = makeShareLayer();
   state.enemies = makeEnemies();
+  state.design = loadDesign() || defaultDesign();
+  state.opponent = loadOpponent() || state.enemies[0];
+  state.enemyIndex = Number(localStorage.getItem(LS.enemyIndex) || 0) || 0;
+  state.enemyIndex = clamp(Math.round(state.enemyIndex), 0, state.enemies.length - 1);
+  state.fightOpponent = state.enemies[state.enemyIndex];
+  state.exportText = exportCode(state.design);
 
-  function uid() {
-    return Math.random().toString(36).slice(2, 9);
+  function uid(prefix = "id") {
+    return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  function placed(type, x, y, rotation = 1) {
-    return { id: uid(), type, x, y, rotation, hp: PARTS[type].hp };
+  function block(type, x, y, rot = 0, id = uid("b")) {
+    return { id, type, x, y, rot };
   }
 
-  function core() {
-    return placed("core", CORE_X, CORE_Y, 0);
+  function logic(type, x = 1, y = 1, id = uid("n")) {
+    return { id, type, x, y, params: {} };
   }
 
-  function defaultBuild() {
-    return normalizeBuild({
-      name: "Egg",
-      parts: [
-        core(),
-        placed("spike", CORE_X + 1, CORE_Y, 1),
-        placed("shield", CORE_X, CORE_Y - 1, 0),
-        placed("leg", CORE_X, CORE_Y + 1, 2),
-        placed("leg", CORE_X + 1, CORE_Y + 1, 2),
-      ],
-    });
-  }
-
-  function normalizeBuild(build) {
-    const seen = new Set();
-    const parts = [];
-    for (const raw of build.parts || []) {
-      if (!PARTS[raw.type] || (raw.type !== "core" && !TRAY.includes(raw.type))) continue;
-      const x = clamp(Math.round(raw.x), 0, GRID_W - 1);
-      const y = clamp(Math.round(raw.y), 0, GRID_H - 1);
-      const key = `${x},${y}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      parts.push({
-        id: raw.id || uid(),
-        type: raw.type,
-        x,
-        y,
-        rotation: clamp(Math.round(raw.rotation || 0), 0, 3),
-        hp: PARTS[raw.type].hp,
-      });
-    }
-    let c = parts.find((p) => p.type === "core");
-    if (!c) {
-      c = core();
-      parts.unshift(c);
-    }
-    c.x = CORE_X;
-    c.y = CORE_Y;
-    c.rotation = 0;
-    c.hp = PARTS.core.hp;
+  function defaultSchematic() {
+    const fireAnd = logic("and", 1, 1, "n_fire_and");
     return {
-      name: build.name || "Egg",
-      parts: pruneDisconnected(parts).slice(0, MAX_PARTS + 1),
+      logicNodes: [fireAnd],
+      wires: [
+        wire("sensor.always", "action.radarSweep"),
+        wire("sensor.always", "action.moveForward"),
+        wire("sensor.enemySeen", "action.aimAtEnemy"),
+        wire("sensor.enemySeen", "n_fire_and.in0"),
+        wire("sensor.gunReady", "n_fire_and.in1"),
+        wire("n_fire_and.out", "action.fire"),
+        wire("sensor.enemyLeft", "action.turnLeft"),
+        wire("sensor.enemyRight", "action.turnRight"),
+        wire("sensor.enemyNear", "action.moveBackward"),
+        wire("sensor.hitWall", "action.turnRight"),
+      ],
     };
   }
 
-  function makeEnemies() {
-    const enemies = [
-      normalizeBuild({
-        name: "Spike Rush",
-        parts: [
-          core(),
-          placed("spike", 6, 3, 1),
-          placed("spike", 7, 3, 1),
-          placed("leg", 5, 4, 2),
-          placed("leg", 6, 4, 2),
-          placed("weight", 4, 3, 3),
-        ],
-      }),
-      normalizeBuild({
-        name: "Shield Wall",
-        parts: [
-          core(),
-          placed("shield", 6, 3, 1),
-          placed("leg", 5, 4, 2),
-          placed("leg", 6, 4, 2),
-          placed("weight", 4, 3, 3),
-        ],
-      }),
-      normalizeBuild({
-        name: "Hammer Head",
-        parts: [
-          core(),
-          placed("shield", 6, 3, 1),
-          placed("hammer", 6, 2, 1),
-          placed("leg", 5, 4, 2),
-          placed("leg", 6, 4, 2),
-          placed("weight", 4, 3, 3),
-        ],
-      }),
-      normalizeBuild({
-        name: "Bomber",
-        parts: [
-          core(),
-          placed("bomb", 6, 3, 1),
-          placed("weight", 4, 3, 3),
-          placed("leg", 4, 4, 2),
-          placed("leg", 5, 4, 2),
-        ],
-      }),
-      normalizeBuild({
-        name: "Heavy Push",
-        parts: [
-          core(),
-          placed("shield", 6, 3, 1),
-          placed("weight", 4, 3, 3),
-          placed("weight", 4, 4, 2),
-          placed("weight", 5, 4, 2),
-          placed("leg", 6, 4, 2),
-        ],
-      }),
-      normalizeBuild({
-        name: "Low Stabber",
-        parts: [
-          core(),
-          placed("leg", 5, 4, 2),
-          placed("spike", 6, 4, 1),
-          placed("wheel", 5, 5, 2),
-          placed("wheel", 6, 5, 2),
-          placed("weight", 4, 3, 3),
-        ],
-      }),
-    ];
-    return enemies;
+  function wire(from, to) {
+    return { from, to };
   }
 
-  function partCount(build = state.build) {
-    return build.parts.filter((p) => p.type !== "core").length;
+  function defaultDesign() {
+    return normalizeDesign({
+      version: 1,
+      name: "My Bot",
+      blocks: [
+        block("core", CORE, CORE, 0, "core"),
+        block("gun", CORE, CORE - 1, 1),
+        block("armor", CORE + 1, CORE, 1),
+        block("radar", CORE - 1, CORE, 3),
+        block("wheel", CORE - 1, CORE + 1, 0),
+        block("wheel", CORE + 1, CORE + 1, 0),
+        block("battery", CORE, CORE + 1, 0),
+      ],
+      schematic: defaultSchematic(),
+    });
   }
 
-  function getAt(parts, x, y) {
-    return parts.find((p) => p.x === x && p.y === y) || null;
-  }
-
-  function hasNeighbor(parts, x, y) {
-    return DIRS.some((d) => getAt(parts, x + d.x, y + d.y));
-  }
-
-  function canPlace(x, y) {
-    if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return false;
-    if (getAt(state.build.parts, x, y)) return false;
-    if (partCount() >= MAX_PARTS) return false;
-    return hasNeighbor(state.build.parts, x, y);
-  }
-
-  function placePart(x, y) {
-    if (!canPlace(x, y)) {
-      blip("...");
-      return;
+  function normalizeDesign(raw) {
+    const blocks = [];
+    const seen = new Set();
+    for (const b of raw?.blocks || []) {
+      if (!BLOCKS[b.type]) continue;
+      const x = clamp(Math.round(b.x), 0, GRID - 1);
+      const y = clamp(Math.round(b.y), 0, GRID - 1);
+      const key = `${x},${y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      blocks.push(block(b.type, x, y, clamp(Math.round(b.rot || 0), 0, 3), String(b.id || uid("b")).slice(0, 24)));
     }
-    const p = placed(state.selectedType, x, y, state.selectedRot);
-    state.build.parts.push(p);
-    state.selectedPartId = p.id;
-    state.hoverCell = null;
-    saveBuild();
-    blip("");
-  }
-
-  function deleteSelected() {
-    if (!state.selectedPartId) return;
-    const target = state.build.parts.find((p) => p.id === state.selectedPartId);
-    if (!target || target.type === "core") return;
-    state.build.parts = pruneDisconnected(state.build.parts.filter((p) => p.id !== state.selectedPartId));
-    state.selectedPartId = null;
-    saveBuild();
-  }
-
-  function rotateSelected() {
-    const target = state.build.parts.find((p) => p.id === state.selectedPartId);
-    if (target && target.type !== "core") {
-      target.rotation = (target.rotation + 1) % 4;
-      state.selectedRot = target.rotation;
-      saveBuild();
-    } else {
-      state.selectedRot = (state.selectedRot + 1) % 4;
+    let core = blocks.find((b) => b.type === "core");
+    if (!core) {
+      core = block("core", CORE, CORE, 0, "core");
+      blocks.unshift(core);
     }
+    core.type = "core";
+    core.x = CORE;
+    core.y = CORE;
+    core.rot = 0;
+    core.id = "core";
+
+    const connected = pruneDisconnected(blocks).slice(0, MAX_BLOCKS);
+    const schematic = normalizeSchematic(raw?.schematic || defaultSchematic());
+    return {
+      version: 1,
+      name: String(raw?.name || "Bot").slice(0, 24),
+      blocks: connected,
+      schematic,
+    };
   }
 
-  function pruneDisconnected(parts) {
-    const map = new Map(parts.map((p) => [`${p.x},${p.y}`, p]));
-    const root = `${CORE_X},${CORE_Y}`;
-    if (!map.has(root)) return [core()];
-    const keep = new Set([root]);
-    const open = [{ x: CORE_X, y: CORE_Y }];
+  function normalizeSchematic(raw) {
+    const logicNodes = [];
+    const logicIds = new Set();
+    for (const n of raw?.logicNodes || []) {
+      if (!LOGIC_TYPES[n.type] || logicNodes.length >= MAX_LOGIC) continue;
+      const id = String(n.id || uid("n")).replace(/[^\w-]/g, "").slice(0, 24) || uid("n");
+      if (logicIds.has(id)) continue;
+      logicIds.add(id);
+      logicNodes.push({ id, type: n.type, x: clamp(Number(n.x) || 1, 0, 2), y: clamp(Number(n.y) || logicNodes.length, 0, 20), params: {} });
+    }
+    const wires = [];
+    for (const w of raw?.wires || []) {
+      if (wires.length >= MAX_WIRES) break;
+      const from = String(w.from || "");
+      const to = String(w.to || "");
+      if (!isOutputEndpoint(from, logicIds) || !isInputEndpoint(to, logicIds)) continue;
+      if (!canConnectEndpoints(from, to, logicNodes)) continue;
+      if (wires.some((x) => x.from === from && x.to === to)) continue;
+      wires.push({ from, to });
+    }
+    return { logicNodes, wires };
+  }
+
+  function isOutputEndpoint(ep, logicIds) {
+    if (ep.startsWith("sensor.")) return SENSORS.some(([id]) => ep === `sensor.${id}`);
+    const [id, port] = ep.split(".");
+    return logicIds.has(id) && port === "out";
+  }
+
+  function isInputEndpoint(ep, logicIds) {
+    if (ep.startsWith("action.")) return ACTIONS.some(([id]) => ep === `action.${id}`);
+    const [id, input] = ep.split(".");
+    if (!logicIds.has(id) || !/^in\d+$/.test(input || "")) return false;
+    return true;
+  }
+
+  function endpointColumn(ep) {
+    if (ep.startsWith("sensor.")) return 0;
+    if (ep.startsWith("action.")) return 2;
+    return 1;
+  }
+
+  function canConnectEndpoints(from, to, logicNodes) {
+    if (from.startsWith("sensor.")) return to.startsWith("action.") || isLogicEndpoint(to);
+    if (!isLogicEndpoint(from)) return false;
+    if (to.startsWith("action.")) return true;
+    if (!isLogicEndpoint(to)) return false;
+    const fromId = from.split(".")[0];
+    const toId = to.split(".")[0];
+    if (fromId === toId) return false;
+    const fromIndex = logicNodes.findIndex((n) => n.id === fromId);
+    const toIndex = logicNodes.findIndex((n) => n.id === toId);
+    return fromIndex >= 0 && toIndex >= 0 && fromIndex < toIndex;
+  }
+
+  function isLogicEndpoint(ep) {
+    return !ep.startsWith("sensor.") && !ep.startsWith("action.");
+  }
+
+  function pruneDisconnected(blocks) {
+    const map = new Map(blocks.map((b) => [`${b.x},${b.y}`, b]));
+    if (!map.has(`${CORE},${CORE}`)) return [block("core", CORE, CORE, 0, "core")];
+    const keep = new Set([`${CORE},${CORE}`]);
+    const open = [{ x: CORE, y: CORE }];
     while (open.length) {
       const c = open.pop();
       for (const d of DIRS) {
@@ -260,888 +259,695 @@
         open.push({ x: nx, y: ny });
       }
     }
-    return parts.filter((p) => keep.has(`${p.x},${p.y}`));
+    return blocks.filter((b) => keep.has(`${b.x},${b.y}`));
   }
 
-  function randomBuild() {
-    const parts = [core()];
-    let guard = 0;
-    while (parts.length < MAX_PARTS + 1 && guard < 180) {
-      guard += 1;
-      const anchor = parts[Math.floor(Math.random() * parts.length)];
-      const d = DIRS[Math.floor(Math.random() * DIRS.length)];
-      const x = anchor.x + d.x;
-      const y = anchor.y + d.y;
-      if (x < 1 || x > GRID_W - 2 || y < 1 || y > GRID_H - 2 || getAt(parts, x, y)) continue;
-      const type = TRAY[Math.floor(Math.random() * TRAY.length)];
-      parts.push(placed(type, x, y, Math.floor(Math.random() * 4)));
-    }
-    state.build = normalizeBuild({ name: "Egg", parts });
-    state.selectedPartId = null;
-    saveBuild();
+  function canPlace(x, y) {
+    if (x < 0 || y < 0 || x >= GRID || y >= GRID) return false;
+    if (state.design.blocks.some((b) => b.x === x && b.y === y)) return false;
+    if (state.design.blocks.length >= MAX_BLOCKS) return false;
+    return DIRS.some((d) => state.design.blocks.some((b) => b.x === x + d.x && b.y === y + d.y));
   }
 
-  function saveBuild() {
+  function saveDesign() {
+    state.design = normalizeDesign(state.design);
+    state.exportText = exportCode(state.design);
     try {
-      localStorage.setItem(LS.build, JSON.stringify(state.build));
+      localStorage.setItem(LS.design, JSON.stringify(state.design));
     } catch {}
   }
 
-  function loadBuild() {
+  function loadDesign() {
     try {
-      const raw = JSON.parse(localStorage.getItem(LS.build) || "null");
-      return raw ? normalizeBuild(raw) : null;
+      const raw = JSON.parse(localStorage.getItem(LS.design) || "null");
+      return raw ? normalizeDesign(raw) : null;
     } catch {
       return null;
     }
   }
 
-  function saveDefense() {
+  function saveOpponent(design) {
+    state.opponent = normalizeDesign(design);
     try {
-      localStorage.setItem(LS.defense, JSON.stringify(state.build));
-      state.enemies = makeEnemies();
-      blip("DEF");
+      localStorage.setItem(LS.opponent, JSON.stringify(state.opponent));
     } catch {}
   }
 
-  function loadDefense() {
+  function loadOpponent() {
     try {
-      const raw = JSON.parse(localStorage.getItem(LS.defense) || "null");
-      return raw ? normalizeBuild(raw) : null;
+      const raw = JSON.parse(localStorage.getItem(LS.opponent) || "null");
+      return raw ? normalizeDesign(raw) : null;
     } catch {
       return null;
     }
   }
 
-  function loadLogs() {
-    try {
-      return JSON.parse(localStorage.getItem(LS.logs) || "[]").slice(0, 10);
-    } catch {
-      return [];
-    }
-  }
-
-  function pushLog(result) {
-    const b = state.battle;
-    const row = {
-      result,
-      enemy: b.enemyName,
-      hp: Math.round(coreHp(b.player)),
-      foe: Math.round(coreHp(b.enemy)),
-      t: Date.now(),
-    };
-    state.logs.unshift(row);
-    state.logs = state.logs.slice(0, 10);
-    try {
-      localStorage.setItem(LS.logs, JSON.stringify(state.logs));
-    } catch {}
-  }
-
-  function blip(text) {
-    state.toast = text;
-    state.toastT = text ? 0.8 : 0;
+  function makeEnemies() {
+    const d = defaultSchematic();
+    const hunter = normalizeDesign({
+      version: 1,
+      name: "Basic Hunter",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("gun", 3, 2, 1), block("armor", 4, 3, 1),
+        block("radar", 2, 3, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("battery", 3, 4),
+      ],
+      schematic: d,
+    });
+    const ram = normalizeDesign({
+      version: 1,
+      name: "Ram Shooter",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("armor", 5, 3, 1),
+        block("gun", 3, 2, 1), block("radar", 2, 3), block("wheel", 3, 4), block("wheel", 2, 4), block("wheel", 4, 4),
+      ],
+      schematic: {
+        logicNodes: [logic("and", 1, 1, "ram_fire")],
+        wires: [
+          wire("sensor.always", "action.radarSweep"), wire("sensor.always", "action.moveForward"),
+          wire("sensor.enemySeen", "action.aimAtEnemy"), wire("sensor.enemySeen", "ram_fire.in0"),
+          wire("sensor.gunReady", "ram_fire.in1"), wire("ram_fire.out", "action.fire"),
+          wire("sensor.enemyLeft", "action.turnLeft"), wire("sensor.enemyRight", "action.turnRight"),
+          wire("sensor.hitWall", "action.turnRight"),
+        ],
+      },
+    });
+    const sniper = normalizeDesign({
+      version: 1,
+      name: "Sniper",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 4, 3, 1),
+        block("gun", 4, 2, 1), block("battery", 2, 3), block("battery", 3, 4), block("armor", 2, 4),
+      ],
+      schematic: {
+        logicNodes: [logic("and", 1, 1, "s_fire"), logic("timer", 1, 2, "s_tick")],
+        wires: [
+          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
+          wire("sensor.enemySeen", "s_fire.in0"), wire("sensor.gunReady", "s_fire.in1"), wire("s_fire.out", "action.fire"),
+          wire("sensor.enemyNear", "action.moveBackward"), wire("s_tick.out", "action.turnRight"),
+        ],
+      },
+    });
+    const wallRunner = normalizeDesign({
+      version: 1,
+      name: "Wall Runner",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 4, 3, 1),
+        block("wheel", 3, 4), block("wheel", 4, 4), block("armor", 4, 2, 1), block("battery", 2, 3),
+      ],
+      schematic: d,
+    });
+    const coward = normalizeDesign({
+      version: 1,
+      name: "Coward",
+      blocks: [
+        block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 2, 3, 3),
+        block("battery", 3, 4), block("battery", 4, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("armor", 3, 1),
+      ],
+      schematic: {
+        logicNodes: [logic("and", 1, 1, "c_fire"), logic("or", 1, 2, "c_escape")],
+        wires: [
+          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
+          wire("sensor.enemySeen", "c_fire.in0"), wire("sensor.gunReady", "c_fire.in1"), wire("c_fire.out", "action.fire"),
+          wire("sensor.enemyNear", "c_escape.in0"), wire("sensor.lowHp", "c_escape.in1"), wire("c_escape.out", "action.moveBackward"),
+          wire("sensor.enemyLeft", "action.turnRight"), wire("sensor.enemyRight", "action.turnLeft"), wire("sensor.hitWall", "action.turnRight"),
+        ],
+      },
+    });
+    return [hunter, ram, sniper, wallRunner, coward];
   }
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
-    state.w = Math.max(320, Math.min(390, Math.round(rect.width || window.innerWidth)));
-    state.h = Math.max(560, Math.round(rect.height || window.innerHeight));
-    state.dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(state.w * state.dpr);
-    canvas.height = Math.round(state.h * state.dpr);
+    state.w = Math.max(320, Math.round(rect.width || 390));
+    state.h = Math.max(560, Math.round(rect.height || 760));
+    state.dpr = Math.max(1, Math.min(2, Math.round(window.devicePixelRatio || 1)));
+    canvas.width = state.w * state.dpr;
+    canvas.height = state.h * state.dpr;
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
-    ctx.imageSmoothingEnabled = false;
+    positionShareLayer();
   }
 
-  function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-  }
+  window.addEventListener("resize", resize);
+  resize();
 
-  function rectHit(r, x, y) {
-    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
-  }
-
-  function addHit(kind, x, y, w, h, data = {}) {
-    state.hits.push({ kind, x, y, w, h, ...data });
-  }
-
-  function hitAt(x, y, kind = "") {
-    return state.hits.slice().reverse().find((h) => (!kind || h.kind === kind) && rectHit(h, x, y));
-  }
-
-  function pointerPos(event) {
+  canvas.addEventListener("pointerdown", (event) => {
     const rect = canvas.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * state.w,
-      y: ((event.clientY - rect.top) / rect.height) * state.h,
-    };
+    const x = (event.clientX - rect.left) * (state.w / rect.width);
+    const y = (event.clientY - rect.top) * (state.h / rect.height);
+    handlePointer(x, y);
+    event.preventDefault();
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      if (state.mode === "build") deleteSelectedBlock();
+      if (state.mode === "wire") deleteSelectedLogic();
+      event.preventDefault();
+    } else if (event.key.toLowerCase() === "r" && state.mode === "build") {
+      rotateSelectedBlock();
+    }
+  });
+
+  function handlePointer(x, y) {
+    const hit = [...state.hits].reverse().find((h) => x >= h.x && y >= h.y && x <= h.x + h.w && y <= h.y + h.h);
+    if (!hit) return;
+    if (hit.kind === "tab") {
+      setMode(hit.mode);
+    } else if (state.mode === "build") {
+      handleBuildHit(hit);
+    } else if (state.mode === "wire") {
+      handleWireHit(hit);
+    } else if (state.mode === "fight") {
+      handleFightHit(hit);
+    } else if (state.mode === "share") {
+      handleShareHit(hit);
+    }
   }
 
-  function onPointerMove(event) {
-    event.preventDefault();
-    const p = pointerPos(event);
-    state.pointer = p;
-    const socket = state.mode === "garage" ? hitAt(p.x, p.y, "socket") : null;
-    state.hoverCell = socket ? { x: socket.gx, y: socket.gy } : null;
+  function handleBuildHit(hit) {
+    if (hit.kind === "palette") {
+      state.selectedBlockType = hit.type;
+      state.selectedBlockId = null;
+    } else if (hit.kind === "cell") {
+      const found = state.design.blocks.find((b) => b.x === hit.gx && b.y === hit.gy);
+      if (found) {
+        state.selectedBlockId = found.id;
+        state.selectedBlockType = found.type === "core" ? state.selectedBlockType : found.type;
+      } else if (canPlace(hit.gx, hit.gy)) {
+        state.design.blocks.push(block(state.selectedBlockType, hit.gx, hit.gy, defaultRot(state.selectedBlockType)));
+        state.selectedBlockId = state.design.blocks[state.design.blocks.length - 1].id;
+        saveDesign();
+      } else {
+        toast("CONNECT");
+      }
+    } else if (hit.kind === "delete") deleteSelectedBlock();
+    else if (hit.kind === "rotate") rotateSelectedBlock();
+    else if (hit.kind === "random") randomDesign();
+    else if (hit.kind === "wire") setMode("wire");
+    else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
   }
 
-  function onPointerDown(event) {
-    event.preventDefault();
-    const p = pointerPos(event);
-    state.pointer = p;
-    const hit = hitAt(p.x, p.y);
-    if (hit) {
-      handleHit(hit);
+  function handleWireHit(hit) {
+    if (hit.kind === "portOut") {
+      state.wireFrom = hit.endpoint;
+    } else if (hit.kind === "portIn") {
+      if (state.wireFrom) addWire(state.wireFrom, hit.endpoint);
+    } else if (hit.kind === "wireLine") {
+      state.design.schematic.wires.splice(hit.index, 1);
+      state.wireFrom = null;
+      saveDesign();
+    } else if (hit.kind === "logic") {
+      state.selectedLogicId = hit.id;
+    } else if (hit.kind === "addLogic") {
+      addLogic(hit.type);
+    } else if (hit.kind === "deleteLogic") deleteSelectedLogic();
+    else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+  }
+
+  function handleFightHit(hit) {
+    if (hit.kind === "restart") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+    else if (hit.kind === "nextEnemy") {
+      state.enemyIndex = (state.enemyIndex + 1) % state.enemies.length;
+      localStorage.setItem(LS.enemyIndex, String(state.enemyIndex));
+      state.fightOpponent = state.enemies[state.enemyIndex];
+      startFight(state.fightOpponent);
+    } else if (hit.kind === "build") setMode("build");
+    else if (hit.kind === "share") setMode("share");
+  }
+
+  function handleShareHit(hit) {
+    if (hit.kind === "fightImported" && state.opponent) {
+      state.fightOpponent = state.opponent;
+      startFight(state.fightOpponent);
+    }
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    if (mode === "fight" && !state.battle) startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+    if (mode === "share") state.exportText = exportCode(state.design);
+    syncShareLayer();
+  }
+
+  function defaultRot(type) {
+    if (type === "gun") return 1;
+    if (type === "radar") return 0;
+    if (type === "armor") return 1;
+    return 0;
+  }
+
+  function deleteSelectedBlock() {
+    const id = state.selectedBlockId;
+    const b = state.design.blocks.find((x) => x.id === id);
+    if (!b || b.type === "core") return;
+    state.design.blocks = pruneDisconnected(state.design.blocks.filter((x) => x.id !== id));
+    state.selectedBlockId = null;
+    saveDesign();
+  }
+
+  function rotateSelectedBlock() {
+    const b = state.design.blocks.find((x) => x.id === state.selectedBlockId);
+    if (b && b.type !== "core") {
+      b.rot = (b.rot + 1) % 4;
+      saveDesign();
+    }
+  }
+
+  function randomDesign() {
+    const blocks = [block("core", CORE, CORE, 0, "core")];
+    let guard = 0;
+    while (blocks.length < MAX_BLOCKS && guard < 200) {
+      guard += 1;
+      const a = blocks[Math.floor(rand01(guard) * blocks.length)];
+      const d = DIRS[Math.floor(rand01(guard * 7) * 4)];
+      const x = a.x + d.x;
+      const y = a.y + d.y;
+      if (x < 0 || y < 0 || x >= GRID || y >= GRID || blocks.some((b) => b.x === x && b.y === y)) continue;
+      const type = PALETTE[Math.floor(rand01(guard * 13) * PALETTE.length)];
+      blocks.push(block(type, x, y, defaultRot(type)));
+    }
+    state.design = normalizeDesign({ version: 1, name: "Random Bot", blocks, schematic: defaultSchematic() });
+    state.selectedBlockId = null;
+    saveDesign();
+  }
+
+  function addLogic(type) {
+    if (state.design.schematic.logicNodes.length >= MAX_LOGIC) {
+      toast("MAX");
       return;
     }
+    const n = logic(type, 1, state.design.schematic.logicNodes.length + 1);
+    state.design.schematic.logicNodes.push(n);
+    state.selectedLogicId = n.id;
+    saveDesign();
   }
 
-  function handleHit(hit) {
-    if (hit.kind === "tray") {
-      state.selectedType = hit.type;
-      state.selectedRot = defaultRotation(hit.type);
-      state.selectedPartId = null;
-    } else if (hit.kind === "socket") {
-      state.hoverCell = { x: hit.gx, y: hit.gy };
-      placePart(hit.gx, hit.gy);
-    } else if (hit.kind === "part") {
-      const existing = state.build.parts.find((p) => p.id === hit.id);
-      if (existing) {
-        state.selectedPartId = existing.id;
-        if (existing.type !== "core") state.selectedType = existing.type;
-        state.selectedRot = existing.rotation;
-      }
-    } else if (hit.kind === "rotate") {
-      rotateSelected();
-    } else if (hit.kind === "delete") {
-      deleteSelected();
-    } else if (hit.kind === "random") {
-      randomBuild();
-    } else if (hit.kind === "fight") {
-      startFight(false);
-    } else if (hit.kind === "save") {
-      saveBuild();
-      blip("SAVE");
-    } else if (hit.kind === "def") {
-      saveDefense();
-    } else if (hit.kind === "retry") {
-      startFight(true);
-    } else if (hit.kind === "garage") {
-      state.mode = "garage";
-      state.battle = null;
-    } else if (hit.kind === "next") {
-      state.enemyIndex = (state.enemyIndex + 1) % state.enemies.length;
-      startFight(false);
+  function deleteSelectedLogic() {
+    const id = state.selectedLogicId;
+    if (!id) return;
+    state.design.schematic.logicNodes = state.design.schematic.logicNodes.filter((n) => n.id !== id);
+    state.design.schematic.wires = state.design.schematic.wires.filter((w) => !w.from.startsWith(`${id}.`) && !w.to.startsWith(`${id}.`));
+    state.selectedLogicId = null;
+    state.wireFrom = null;
+    saveDesign();
+  }
+
+  function addWire(from, to) {
+    const nodes = state.design.schematic.logicNodes;
+    const logicIds = new Set(nodes.map((n) => n.id));
+    if (!isOutputEndpoint(from, logicIds) || !isInputEndpoint(to, logicIds)) {
+      state.wireFrom = null;
+      return;
     }
+    if (!canConnectEndpoints(from, to, nodes)) {
+      toast("LEFT > RIGHT");
+      state.wireFrom = null;
+      return;
+    }
+    const wires = state.design.schematic.wires;
+    const existing = wires.findIndex((w) => w.from === from && w.to === to);
+    if (existing >= 0) wires.splice(existing, 1);
+    else if (wires.length < MAX_WIRES) wires.push({ from, to });
+    state.wireFrom = null;
+    saveDesign();
   }
 
-  function defaultRotation(type) {
-    if (type === "leg" || type === "wheel" || type === "weight") return 2;
-    if (type === "wing") return 0;
-    return 1;
-  }
-
-  function layoutGarage() {
-    const w = Math.min(state.w, Math.round(window.innerWidth || state.w));
-    const h = Math.min(state.h, Math.round(window.innerHeight || state.h));
-    const pad = Math.max(14, Math.floor(w * 0.04));
-    const trayGap = 8;
-    const traySize = Math.floor(Math.min(64, (w - pad * 2 - trayGap * 3) / 4));
-    const trayH = traySize * 2 + trayGap;
-    const actionH = Math.max(46, Math.min(54, traySize * 0.82));
-    const trayY = h - pad - trayH;
-    const actionY = trayY - 12 - actionH;
-    const botTop = 62;
-    const botBottom = actionY - 18;
-    const botH = Math.max(250, botBottom - botTop);
-    const e = buildExtents(state.build.parts);
-    const cellsW = Math.max(3.2, e.maxX - e.minX + 1.15);
-    const cellsH = Math.max(3.4, e.maxY - e.minY + 1.25);
-    const gap = Math.floor(Math.min(70, Math.max(48, Math.min((w - pad * 2 - 22) / cellsW, (botH - 24) / cellsH))));
-    const bot = botLayout(state.build, w / 2, botTop + botH * 0.48, gap);
-    return {
-      pad,
-      trayGap,
-      traySize,
-      trayY,
-      trayH,
-      actionY,
-      actionH,
-      botTop,
-      botBottom,
-      gap,
-      partSize: Math.round(gap * 0.96),
-      bot,
-    };
-  }
-
-  function cellFromPoint(x, y) {
-    const hit = hitAt(x, y, "socket");
-    return hit ? { x: hit.gx, y: hit.gy } : null;
-  }
-
-  function buildExtents(parts) {
-    const live = parts.length ? parts : [core()];
-    return {
-      minX: Math.min(...live.map((p) => p.x)),
-      maxX: Math.max(...live.map((p) => p.x)),
-      minY: Math.min(...live.map((p) => p.y)),
-      maxY: Math.max(...live.map((p) => p.y)),
-    };
-  }
-
-  function botLayout(build, centerX, centerY, gap) {
-    const e = buildExtents(build.parts);
-    const minX = (e.minX - CORE_X) * gap;
-    const maxX = (e.maxX - CORE_X) * gap;
-    const minY = (e.minY - CORE_Y) * gap;
-    const maxY = (e.maxY - CORE_Y) * gap;
-    const ox = Math.round(centerX - (minX + maxX) / 2);
-    const oy = Math.round(centerY - (minY + maxY) / 2);
-    return { ox, oy, gap };
-  }
-
-  function garagePoint(l, gx, gy) {
-    return {
-      x: l.bot.ox + (gx - CORE_X) * l.gap,
-      y: l.bot.oy + (gy - CORE_Y) * l.gap,
-    };
-  }
-
-  function startFight(replay) {
-    const enemy = state.enemies[state.enemyIndex];
-    state.mode = "fight";
-    const cell = clamp(Math.floor(state.w / 7), 52, 62);
+  function startFight(opponent) {
+    state.fightOpponent = normalizeDesign(opponent || state.enemies[state.enemyIndex]);
+    const arena = fightArena();
+    const seed = hashString(JSON.stringify(state.design) + JSON.stringify(state.fightOpponent));
     state.battle = {
       t: 0,
-      phase: "intro",
-      intro: replay ? 0.35 : 0.75,
+      acc: 0,
+      seed,
+      rng: mulberry32(seed),
       result: "",
-      pending: "",
-      pendingT: 0,
-      record: !replay,
-      cell,
-      clashGap: Math.round(cell * 1.05),
-      shake: 0,
-      flash: 0,
-      slow: 0,
+      reason: "",
+      arena,
+      bullets: [],
       particles: [],
-      debris: [],
-      events: [],
-      eventCounts: {},
-      hasClashed: false,
-      player: makeBattleBot(state.build, 1, -cell * 1.8, cell),
-      enemy: makeBattleBot(enemy, -1, state.w + cell * 1.8, cell),
-      enemyName: enemy.name,
+      player: makeBattleBot(state.design, "P", arena.x + arena.w * 0.23, arena.y + arena.h * 0.5, 0, seed ^ 0x1234),
+      enemy: makeBattleBot(state.fightOpponent, "E", arena.x + arena.w * 0.77, arena.y + arena.h * 0.5, Math.PI, seed ^ 0xabcd),
     };
+    state.mode = "fight";
+    syncShareLayer();
   }
 
-  function makeBattleBot(build, facing, x, cell) {
-    const parts = build.parts.map((p) => ({
-      ...p,
-      localX: p.x - CORE_X,
-      localY: p.y - CORE_Y,
-      hp: PARTS[p.type].hp,
-      maxHp: PARTS[p.type].hp,
+  function makeBattleBot(design, side, x, y, angle, seed) {
+    const blocks = design.blocks.map((b) => ({
+      ...b,
+      hp: BLOCKS[b.type].hp,
+      maxHp: BLOCKS[b.type].hp,
       alive: true,
-      broken: false,
-      detached: false,
-      cooldown: Math.random() * 0.28,
-      cool: Math.random() * 0.28,
-      windup: 0,
-      swing: 0,
-      bite: 0,
-      fuse: 0,
       flash: 0,
-      worldX: x,
-      worldY: 0,
+      localX: b.x - CORE,
+      localY: b.y - CORE,
     }));
     const bot = {
-      facing,
-      build,
+      id: side,
+      side,
+      design,
+      blocks,
       x,
-      y: state.h * 0.58,
-      vx: 0,
-      vy: 0,
-      angle: 0,
-      av: 0,
-      mass: 1,
-      stagger: 0,
-      recoil: 0,
-      stepTimer: 0.18 + Math.random() * 0.2,
-      stepPose: 0,
+      y,
+      bodyAngle: angle,
+      turretAngle: angle,
+      radarAngle: angle,
+      radarDir: 1,
+      energy: 0,
+      maxEnergy: 1,
+      regen: 1,
+      gunCooldown: 0,
+      hitWallT: 0,
+      hitBulletT: 0,
+      lastSeenT: 0,
+      lastSeenAngle: angle,
+      lastSeenDist: 9999,
+      sensors: {},
+      actions: {},
+      logicMemory: {},
+      rand: mulberry32(seed),
       defeated: false,
-      bottom: cell * 0.5,
-      top: -cell * 0.5,
-      groundOffset: facing === 1 ? -8 : 8,
-      parts,
-      coreFlash: 0,
-      dead: false,
     };
-    recalcBot(bot, cell);
-    bot.y = fightGround() + bot.groundOffset - bot.bottom;
+    recalcBotStats(bot);
+    bot.energy = bot.maxEnergy;
     return bot;
   }
 
-  function fightGround() {
-    return Math.round(state.h * 0.67);
+  function recalcBotStats(bot) {
+    const live = (type) => bot.blocks.filter((b) => b.alive && b.type === type).length;
+    bot.stats = {
+      wheels: live("wheel"),
+      guns: live("gun"),
+      radars: live("radar"),
+      batteries: live("battery"),
+      armor: live("armor"),
+    };
+    bot.maxEnergy = BLOCKS.core.energy + bot.stats.batteries * BLOCKS.battery.energy;
+    bot.regen = BLOCKS.core.regen + bot.stats.batteries * BLOCKS.battery.regen;
+    bot.speed = 26 + bot.stats.wheels * 31;
+    bot.turn = 1.0 + bot.stats.wheels * 0.32;
+    bot.radarRange = bot.stats.radars ? 210 + bot.stats.radars * 45 : 0;
+    bot.radarFov = bot.stats.radars ? 0.48 + bot.stats.radars * 0.07 : 0;
+    bot.gunCooldownMax = Math.max(0.34, 0.82 - bot.stats.guns * 0.08);
   }
 
-  function recalcBot(bot, cell) {
-    const alive = bot.parts.filter((p) => p.alive && !p.detached);
-    bot.mass = Math.max(1, alive.reduce((sum, p) => sum + PARTS[p.type].mass, 0));
-    bot.bottom = alive.length ? Math.max(...alive.map((p) => (p.y - CORE_Y) * cell + cell * 0.48)) : cell * 0.5;
-    bot.top = alive.length ? Math.min(...alive.map((p) => (p.y - CORE_Y) * cell - cell * 0.48)) : -cell * 0.5;
-    const c = alive.find((p) => p.type === "core");
-    bot.dead = !c || c.hp <= 0;
-    bot.defeated = bot.dead;
-  }
-
-  function coreHp(bot) {
-    const c = bot.parts.find((p) => p.type === "core");
-    return c && c.alive ? Math.max(0, c.hp) : 0;
-  }
-
-  function updateBattle(dt) {
+  function updateFight(dt) {
     const b = state.battle;
     if (!b) return;
     updateParticles(b, dt);
-    b.shake = Math.max(0, b.shake - dt * 22);
-    b.flash = Math.max(0, b.flash - dt);
     if (b.result) return;
-    if (b.pending) {
-      b.pendingT -= dt;
-      if (b.pendingT <= 0) {
-        b.result = b.pending;
-        b.pending = "";
-        if (b.record) pushLog(b.result);
-      }
-      return;
-    }
-
-    const simDt = b.slow > 0 ? dt * 0.35 : dt;
-    b.slow = Math.max(0, b.slow - dt);
-    b.t += simDt;
-    b.intro = Math.max(0, b.intro - simDt);
-    updateBattleEffects(b, simDt);
-    updateBotV2(b.player, b.enemy, simDt, b);
-    updateBotV2(b.enemy, b.player, simDt, b);
-    updateBattleSpacing(b.player, b.enemy, simDt, b);
-    updateWorldPartCache(b.player, b.cell);
-    updateWorldPartCache(b.enemy, b.cell);
-    runCombatEvents(b.player, b.enemy, simDt, b);
-    runCombatEvents(b.enemy, b.player, simDt, b);
-    recalcBot(b.player, b.cell);
-    recalcBot(b.enemy, b.cell);
-
-    if (coreHp(b.player) <= 0 && coreHp(b.enemy) <= 0) endFight("DRAW");
-    else if (coreHp(b.enemy) <= 0) endFight("WIN");
-    else if (coreHp(b.player) <= 0) endFight("LOSE");
-    else if (b.t >= MAX_FIGHT) {
-      const p = coreHp(b.player);
-      const e = coreHp(b.enemy);
-      const result = p === e ? (liveMass(b.player) >= liveMass(b.enemy) ? "WIN" : "LOSE") : p > e ? "WIN" : "LOSE";
-      endFight(result);
+    b.acc += Math.min(dt, 0.08);
+    let loops = 0;
+    while (b.acc >= TICK && loops < 4) {
+      stepBattle(b, TICK);
+      b.acc -= TICK;
+      loops += 1;
     }
   }
 
-  function endFight(result) {
+  function stepBattle(b, dt) {
+    b.t += dt;
+    updateBotSignals(b.player, b.enemy, b, dt);
+    updateBotSignals(b.enemy, b.player, b, dt);
+    evaluateSchematic(b.player, b, dt);
+    evaluateSchematic(b.enemy, b, dt);
+    applyActions(b.player, b, dt);
+    applyActions(b.enemy, b, dt);
+    updateBullets(b, dt);
+    for (const bot of [b.player, b.enemy]) {
+      bot.energy = clamp(bot.energy + bot.regen * dt, 0, bot.maxEnergy);
+      bot.gunCooldown = Math.max(0, bot.gunCooldown - dt);
+      bot.hitWallT = Math.max(0, bot.hitWallT - dt);
+      bot.hitBulletT = Math.max(0, bot.hitBulletT - dt);
+      bot.lastSeenT = Math.max(0, bot.lastSeenT - dt);
+      for (const bl of bot.blocks) bl.flash = Math.max(0, bl.flash - dt * 5);
+      recalcBotStats(bot);
+    }
+    const pc = coreHp(b.player);
+    const ec = coreHp(b.enemy);
+    if (pc <= 0 && ec <= 0) finishFight("DRAW", "CORES");
+    else if (ec <= 0) finishFight("WIN", "CORE");
+    else if (pc <= 0) finishFight("LOSE", "CORE");
+    else if (b.t >= MAX_FIGHT) {
+      const pm = totalHp(b.player);
+      const em = totalHp(b.enemy);
+      finishFight(pm >= em ? "WIN" : "LOSE", "TIME");
+    }
+  }
+
+  function updateBotSignals(bot, foe, battle) {
+    const core = bot.blocks.find((x) => x.type === "core" && x.alive);
+    const foeCore = foe.blocks.find((x) => x.type === "core" && x.alive);
+    const dist = foeCore ? Math.hypot(foe.x - bot.x, foe.y - bot.y) : 9999;
+    let seen = false;
+    if (bot.stats?.radars > 0 && foeCore) {
+      const target = nearestLiveBlockWorld(bot, foe, battle);
+      const a = Math.atan2(target.y - bot.y, target.x - bot.x);
+      const d = Math.hypot(target.x - bot.x, target.y - bot.y);
+      seen = d < bot.radarRange && Math.abs(angleDiff(a, bot.radarAngle)) < bot.radarFov;
+      if (seen) {
+        bot.lastSeenAngle = a;
+        bot.lastSeenDist = d;
+        bot.lastSeenT = 1.35;
+      }
+    }
+    const seenOrMemory = seen || bot.lastSeenT > 0;
+    const side = angleDiff(bot.lastSeenAngle, bot.bodyAngle);
+    const hp = totalHp(bot);
+    const maxHp = bot.blocks.reduce((sum, bl) => sum + bl.maxHp, 0);
+    bot.sensors = {
+      always: true,
+      enemySeen: seen,
+      enemyNear: seen && dist < 150,
+      enemyLeft: seenOrMemory && side < -0.12,
+      enemyRight: seenOrMemory && side > 0.12,
+      gunReady: bot.stats.guns > 0 && bot.gunCooldown <= 0 && bot.energy >= fireCost(bot),
+      hitWall: bot.hitWallT > 0,
+      hitByBullet: bot.hitBulletT > 0,
+      lowHp: coreHp(bot) < BLOCKS.core.hp * 0.45 || hp < maxHp * 0.45,
+      lowEnergy: bot.energy < bot.maxEnergy * 0.28,
+    };
+  }
+
+  function evaluateSchematic(bot, battle, dt) {
+    const s = bot.design.schematic;
+    const values = {};
+    for (const [id] of SENSORS) values[`sensor.${id}`] = !!bot.sensors[id];
+    const inputValue = (endpoint) => s.wires.some((w) => w.to === endpoint && values[w.from]);
+    for (const node of s.logicNodes) {
+      const key = node.id;
+      const info = LOGIC_TYPES[node.type];
+      let value = false;
+      if (node.type === "and") {
+        value = inputValue(`${key}.in0`) && inputValue(`${key}.in1`);
+      } else if (node.type === "or") {
+        value = inputValue(`${key}.in0`) || inputValue(`${key}.in1`);
+      } else if (node.type === "not") {
+        value = !inputValue(`${key}.in0`);
+      } else if (node.type === "timer") {
+        const period = 1.05;
+        value = (battle.t % period) < 0.18;
+      } else if (node.type === "random") {
+        const mem = bot.logicMemory[key] || { next: 0, value: false };
+        if (battle.t >= mem.next) {
+          mem.value = bot.rand() < 0.38;
+          mem.next = battle.t + 0.45;
+          bot.logicMemory[key] = mem;
+        }
+        value = mem.value;
+      }
+      if (!info.inputs && (node.type === "timer" || node.type === "random")) value = !!value;
+      values[`${key}.out`] = value;
+    }
+    bot.actions = {};
+    for (const [id] of ACTIONS) bot.actions[id] = inputValue(`action.${id}`);
+    if (bot.side === "P") state.lastSignals = values;
+  }
+
+  function applyActions(bot, battle, dt) {
+    const a = bot.actions;
+    const move = (a.moveForward ? 1 : 0) - (a.moveBackward ? 1 : 0);
+    const turn = (a.turnRight ? 1 : 0) - (a.turnLeft ? 1 : 0);
+    bot.bodyAngle = normAngle(bot.bodyAngle + turn * bot.turn * dt);
+    if (move) {
+      bot.x += Math.cos(bot.bodyAngle) * bot.speed * move * dt;
+      bot.y += Math.sin(bot.bodyAngle) * bot.speed * move * dt;
+    }
+    const ar = battle.arena;
+    const margin = botRadius(bot, battle);
+    const ox = bot.x;
+    const oy = bot.y;
+    bot.x = clamp(bot.x, ar.x + margin, ar.x + ar.w - margin);
+    bot.y = clamp(bot.y, ar.y + margin, ar.y + ar.h - margin);
+    if (Math.abs(bot.x - ox) > 0.01 || Math.abs(bot.y - oy) > 0.01) bot.hitWallT = 0.36;
+
+    if (bot.stats.radars > 0) {
+      if (a.radarSweep) {
+        if (bot.sensors.enemySeen || bot.lastSeenT > 0) {
+          bot.radarAngle = approachAngle(bot.radarAngle, bot.lastSeenAngle, 5.2 * dt);
+        } else {
+          bot.radarAngle = normAngle(bot.radarAngle + bot.radarDir * 2.8 * dt);
+          if (Math.abs(angleDiff(bot.radarAngle, bot.bodyAngle)) > 1.35) bot.radarDir *= -1;
+        }
+      } else {
+        bot.radarAngle = approachAngle(bot.radarAngle, bot.bodyAngle, 2 * dt);
+      }
+    }
+    if (a.aimAtEnemy && bot.lastSeenT > 0) bot.turretAngle = approachAngle(bot.turretAngle, bot.lastSeenAngle, 5.8 * dt);
+    else bot.turretAngle = approachAngle(bot.turretAngle, bot.bodyAngle, 1.2 * dt);
+    const aimed = bot.lastSeenT > 0 && Math.abs(angleDiff(bot.turretAngle, bot.lastSeenAngle)) < 0.22;
+    if (a.fire && bot.sensors.gunReady && aimed) fireBullet(bot, battle);
+  }
+
+  function fireBullet(bot, battle) {
+    const gun = bot.blocks.find((bl) => bl.alive && bl.type === "gun");
+    if (!gun) return;
+    const pos = blockWorld(bot, gun, battleScale(battle));
+    const speed = 360;
+    const dmg = 10 + Math.max(0, bot.stats.guns - 1) * 2;
+    const cost = fireCost(bot);
+    bot.energy -= cost;
+    bot.gunCooldown = bot.gunCooldownMax;
+    battle.bullets.push({
+      x: pos.x + Math.cos(bot.turretAngle) * 16,
+      y: pos.y + Math.sin(bot.turretAngle) * 16,
+      vx: Math.cos(bot.turretAngle) * speed,
+      vy: Math.sin(bot.turretAngle) * speed,
+      owner: bot.id,
+      damage: dmg,
+      ttl: 2.8,
+    });
+    spawnSpark(pos.x, pos.y, battle, 4);
+  }
+
+  function fireCost(bot) {
+    return Math.max(6, 9 - Math.max(0, bot.stats.guns - 1));
+  }
+
+  function updateBullets(battle, dt) {
+    const next = [];
+    for (const bullet of battle.bullets) {
+      bullet.ttl -= dt;
+      bullet.x += bullet.vx * dt;
+      bullet.y += bullet.vy * dt;
+      const ar = battle.arena;
+      if (bullet.ttl <= 0 || bullet.x < ar.x || bullet.y < ar.y || bullet.x > ar.x + ar.w || bullet.y > ar.y + ar.h) continue;
+      const target = bullet.owner === "P" ? battle.enemy : battle.player;
+      const hit = bulletHitBlock(target, bullet, battle);
+      if (hit) {
+        damageBlock(target, hit, bullet.damage, battle);
+        spawnSpark(bullet.x, bullet.y, battle, 10);
+        continue;
+      }
+      next.push(bullet);
+    }
+    battle.bullets = next;
+  }
+
+  function bulletHitBlock(bot, bullet, battle) {
+    const scale = battleScale(battle);
+    let best = null;
+    for (const bl of bot.blocks) {
+      if (!bl.alive) continue;
+      const p = blockWorld(bot, bl, scale);
+      const d = Math.hypot(p.x - bullet.x, p.y - bullet.y);
+      const r = scale * (bl.type === "armor" ? 0.95 : 0.82) + 3;
+      if (d <= r && (!best || d < best.d)) best = { bl, d };
+    }
+    return best?.bl || null;
+  }
+
+  function damageBlock(bot, bl, amount, battle) {
+    bl.hp -= amount;
+    bl.flash = 1;
+    bot.hitBulletT = 0.45;
+    if (bl.hp <= 0 && bl.alive) {
+      bl.alive = false;
+      const p = blockWorld(bot, bl, battleScale(battle));
+      spawnBreak(p.x, p.y, battle, bl.type === "core" ? 24 : 12);
+    }
+  }
+
+  function finishFight(result, reason) {
     const b = state.battle;
     if (!b || b.result) return;
     b.result = result;
-    b.pending = "";
-    if (b.record) pushLog(b.result);
-    b.shake = 14;
-    b.flash = 0.12;
-    burst(state.w / 2, state.h * 0.42, 34, b, 1.8);
+    b.reason = reason;
+    spawnBreak(state.w / 2, state.h * 0.36, b, 28);
   }
 
-  function updateBattleEffects(b, dt) {
-    b.events = b.events.filter((e) => {
-      e.duration -= dt;
-      return e.duration > 0;
-    });
-    for (const d of b.debris) {
-      d.life -= dt;
-      d.x += d.vx * dt;
-      d.y += d.vy * dt;
-      d.vy += 320 * dt;
-      d.rot += d.spin * dt;
-    }
-    b.debris = b.debris.filter((d) => d.life > 0);
+  function fightArena() {
+    const top = 58;
+    const bottom = Math.max(top + 320, state.h - 104);
+    const pad = 14;
+    return { x: pad, y: top, w: state.w - pad * 2, h: bottom - top };
   }
 
-  function updateBotV2(bot, foe, dt, b) {
-    let movers = 0;
-    let wheels = 0;
-    let weights = 0;
-    for (const p of bot.parts) {
-      if (!p.alive || p.detached) continue;
-      p.cooldown = Math.max(0, p.cooldown - dt);
-      p.cool = p.cooldown;
-      if (p.windup > 0) {
-        p.windup -= dt;
-        if (p.windup <= 0 && p.type === "hammer") swingHammer(bot, foe, p, b);
-      }
-      p.swing = Math.max(0, p.swing - dt);
-      p.bite = Math.max(0, p.bite - dt);
-      p.flash = Math.max(0, p.flash - dt);
-      if (p.fuse > 0) {
-        p.fuse -= dt;
-        if (p.fuse <= 0) explodeBomb(bot, p, b);
-      }
-      if (p.type === "leg" && p.y >= CORE_Y) movers += 1;
-      if (p.type === "wheel" && p.y >= CORE_Y) wheels += 1;
-      if (p.type === "weight") weights += 1;
-    }
-    bot.stagger = Math.max(0, bot.stagger - dt);
-    bot.recoil = Math.max(0, bot.recoil - dt * 58);
-    bot.stepPose = Math.max(0, bot.stepPose - dt * 5);
-    bot.stepTimer -= dt * (bot.stagger > 0 ? 0.35 : 1);
-    if (bot.stepTimer <= 0) {
-      const pace = clamp(0.48 - wheels * 0.045 + weights * 0.035, 0.28, 0.62);
-      bot.stepTimer = pace;
-      bot.stepPose = 1;
-      if (b.phase === "approach") {
-        bot.x += bot.facing * (7 + movers * 3 + wheels * 6) / Math.max(1, 1 + weights * 0.18);
-      }
-    }
-    const ground = fightGround() + bot.groundOffset;
-    bot.y = ground - bot.bottom - Math.sin(bot.stepPose * Math.PI) * 5;
-    const com = centerOfMass(bot);
-    bot.angle = clamp(com.x * bot.facing * 0.035 + Math.sin(b.t * 8 + bot.facing) * 0.025 * bot.stepPose, -0.18, 0.18);
-    bot.coreFlash = Math.max(0, bot.coreFlash - dt);
+  function battleScale(battle) {
+    return clamp(Math.floor(battle.arena.w / 27), 11, 17);
   }
 
-  function updateBattleSpacing(player, enemy, dt, b) {
-    const pf = frontBounds(player, b.cell);
-    const ef = frontBounds(enemy, b.cell);
-    const gap = ef.front - pf.front;
-    if (b.intro > 0) {
-      b.phase = "intro";
-    } else if (!b.hasClashed && gap > b.clashGap + b.cell * 0.08) {
-      b.phase = "approach";
-    } else {
-      if (!b.hasClashed) {
-        eventAt(b, "recoil", state.w / 2, fightGround() - b.cell, 0.22);
-        b.shake = Math.max(b.shake, 6);
-      }
-      b.hasClashed = true;
-      b.phase = "clash";
-    }
-
-    if (!b.hasClashed && (b.phase === "intro" || b.phase === "approach")) {
-      const ps = approachSpeed(player);
-      const es = approachSpeed(enemy);
-      player.x += player.facing * ps * dt;
-      enemy.x += enemy.facing * es * dt;
-    }
-
-    const pf2 = frontBounds(player, b.cell);
-    const ef2 = frontBounds(enemy, b.cell);
-    const nowGap = ef2.front - pf2.front;
-    if (nowGap < b.clashGap) {
-      const fix = (b.clashGap - nowGap) * 0.5;
-      player.x -= fix;
-      enemy.x += fix;
-    }
-  }
-
-  function approachSpeed(bot) {
-    let legs = 0;
-    let wheels = 0;
-    let weights = 0;
-    for (const p of bot.parts) {
-      if (!p.alive || p.detached) continue;
-      if (p.type === "leg" && p.y >= CORE_Y) legs += 1;
-      if (p.type === "wheel" && p.y >= CORE_Y) wheels += 1;
-      if (p.type === "weight") weights += 1;
-    }
-    return Math.max(18, 34 + legs * 14 + wheels * 28 - weights * 8);
-  }
-
-  function frontBounds(bot, cell) {
-    let alive = bot.parts.filter((p) => p.alive && !p.detached && p.type !== "spike" && p.type !== "hammer");
-    if (!alive.length) alive = bot.parts.filter((p) => p.alive && !p.detached);
-    if (!alive.length) return { front: bot.x, back: bot.x };
-    const xs = alive.map((p) => {
-      const w = partWorld(bot, p, cell);
-      return { x: w.x, r: partRadius(p.type, cell) * 0.72 };
-    });
-    if (bot.facing === 1) {
-      return {
-        front: Math.max(...xs.map((p) => p.x + p.r)),
-        back: Math.min(...xs.map((p) => p.x - p.r)),
-      };
-    }
-    return {
-      front: Math.min(...xs.map((p) => p.x - p.r)),
-      back: Math.max(...xs.map((p) => p.x + p.r)),
-    };
-  }
-
-  function partRadius(type, cell) {
-    if (type === "core") return cell * 0.46;
-    if (type === "shield") return cell * 0.48;
-    if (type === "weight" || type === "wheel" || type === "bomb") return cell * 0.43;
-    if (type === "leg") return cell * 0.34;
-    if (type === "spike") return cell * 0.38;
-    return cell * 0.4;
-  }
-
-  function updateWorldPartCache(bot, cell) {
-    for (const p of bot.parts) {
-      if (!p.alive || p.detached) continue;
-      const w = partWorld(bot, p, cell);
-      p.worldX = w.x;
-      p.worldY = w.y;
-    }
-  }
-
-  function runCombatEvents(attacker, defender, dt, battle) {
-    if (battle.phase !== "clash" || attacker.stagger > 0.55) return;
-    for (const p of attacker.parts) {
-      if (!p.alive || p.detached || p.fuse > 0) continue;
-      if (p.type === "spike") trySpikeStab(attacker, defender, p, battle);
-      else if (p.type === "hammer") tryHammerWindup(attacker, p, battle);
-    }
-  }
-
-  function trySpikeStab(attacker, defender, p, battle) {
-    if (p.cooldown > 0) return;
-    const dir = partDirection(attacker, p);
-    if (dir.x * attacker.facing < 0.55) return;
-    const pos = partWorld(attacker, p, battle.cell);
-    const start = { x: pos.x + dir.x * battle.cell * 0.25, y: pos.y + dir.y * battle.cell * 0.25 };
-    const end = { x: pos.x + dir.x * battle.cell * 2.08, y: pos.y + dir.y * battle.cell * 2.08 };
-    const target = firstLineTarget(defender, start, end, battle.cell * 0.42, battle);
-    if (!target) return;
-    p.cooldown = 0.78;
-    p.cool = p.cooldown;
-    p.swing = 0.12;
-    const impact = {
-      x: (end.x + target.x) / 2,
-      y: (end.y + target.y) / 2,
-    };
-    if (target.part.type === "shield" && shieldFacesSource(defender, target.part, pos.x, pos.y, battle.cell)) {
-      blockAttack(attacker, defender, target.part, pos, impact, battle, 1.0);
-      return;
-    }
-    eventAt(battle, "stab", impact.x, impact.y, 0.28, { attackerId: p.id, targetId: target.part.id });
-    spark(impact.x, impact.y, battle, 5);
-    damagePart(defender, target.part, target.part.type === "core" ? 3.0 : 2.8, pos.x, pos.y, battle, "stab");
-    attacker.recoil = Math.max(attacker.recoil, 6);
-    defender.stagger = Math.max(defender.stagger, 0.12);
-  }
-
-  function tryHammerWindup(attacker, p, battle) {
-    if (p.cooldown > 0 || p.windup > 0 || p.swing > 0) return;
-    const dir = partDirection(attacker, p);
-    if (dir.x * attacker.facing < 0.2) return;
-    p.windup = 0.26;
-    p.cooldown = 1.18;
-    p.cool = p.cooldown;
-    const pos = partWorld(attacker, p, battle.cell);
-    eventAt(battle, "hammer", pos.x + dir.x * battle.cell * 0.7, pos.y + dir.y * battle.cell * 0.7, 0.22, {
-      attackerId: p.id,
-      windup: true,
-    });
-  }
-
-  function swingHammer(attacker, defender, p, battle) {
-    if (!p.alive || p.detached) return;
-    p.swing = 0.38;
-    const pos = partWorld(attacker, p, battle.cell);
-    const dir = partDirection(attacker, p);
-    const target = swingTarget(defender, pos, dir, battle);
-    const cx = pos.x + dir.x * battle.cell * 1.03;
-    const cy = pos.y + dir.y * battle.cell * 1.03;
-    eventAt(battle, "hammer", cx, cy, 0.34, { attackerId: p.id });
-    if (!target) return;
-    const impact = { x: target.x, y: target.y };
-    if (target.part.type === "shield" && shieldFacesSource(defender, target.part, pos.x, pos.y, battle.cell)) {
-      blockAttack(attacker, defender, target.part, pos, impact, battle, 1.8);
-      return;
-    }
-    shock(impact.x, impact.y, battle, "hammer");
-    eventAt(battle, "hammer", impact.x, impact.y, 0.32, { attackerId: p.id, targetId: target.part.id, hit: true });
-    damagePart(defender, target.part, target.part.type === "core" ? 5.2 : 5, pos.x, pos.y, battle, "hammer");
-    defender.stagger = Math.max(defender.stagger, 0.42);
-    defender.recoil = Math.max(defender.recoil, 15);
-  }
-
-  function blockAttack(attacker, defender, shield, source, impact, battle, amount) {
-    eventAt(battle, "block", impact.x, impact.y, 0.32, { targetId: shield.id });
-    shieldClang(impact.x, impact.y, battle);
-    damagePart(defender, shield, amount, source.x, source.y, battle, "block");
-    attacker.stagger = Math.max(attacker.stagger, 0.18);
-    attacker.recoil = Math.max(attacker.recoil, 18);
-  }
-
-  function firstLineTarget(bot, start, end, width, battle) {
-    const dir = norm({ x: end.x - start.x, y: end.y - start.y });
-    const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-    let best = null;
-    for (const p of bot.parts) {
-      if (!p.alive || p.detached) continue;
-      const w = partWorld(bot, p, battle.cell);
-      const vx = w.x - start.x;
-      const vy = w.y - start.y;
-      const t = vx * dir.x + vy * dir.y;
-      if (t < -battle.cell * 0.2 || t > len + battle.cell * 0.2) continue;
-      const px = start.x + dir.x * t;
-      const py = start.y + dir.y * t;
-      const dist = Math.hypot(w.x - px, w.y - py);
-      if (dist > width + partRadius(p.type, battle.cell) * 0.32) continue;
-      const score = t - (p.type === "shield" ? battle.cell * 0.2 : 0) + Math.abs(w.y - start.y) * 0.15;
-      if (!best || score < best.score) best = { part: p, x: w.x, y: w.y, score };
-    }
-    return best;
-  }
-
-  function swingTarget(bot, origin, dir, battle) {
-    let best = null;
-    for (const p of bot.parts) {
-      if (!p.alive || p.detached) continue;
-      const w = partWorld(bot, p, battle.cell);
-      const vx = w.x - origin.x;
-      const vy = w.y - origin.y;
-      const ahead = vx * dir.x + vy * dir.y;
-      const side = Math.abs(vx * -dir.y + vy * dir.x);
-      if (ahead < battle.cell * 0.1 || ahead > battle.cell * 2.15) continue;
-      if (side > battle.cell * 1.08) continue;
-      const highBias = Math.max(0, (CORE_Y - p.y) * 9);
-      const score = ahead + side * 0.65 - highBias - (p.type === "shield" ? battle.cell * 0.25 : 0);
-      if (!best || score < best.score) best = { part: p, x: w.x, y: w.y, score };
-    }
-    return best;
-  }
-
-  function shieldFacesSource(bot, shield, sx, sy, cell) {
-    const w = partWorld(bot, shield, cell);
-    const face = partDirection(bot, shield);
-    const source = norm({ x: sx - w.x, y: sy - w.y });
-    return face.x * source.x + face.y * source.y > 0.25;
-  }
-
-  function eventAt(battle, kind, x, y, duration = 0.25, data = {}) {
-    battle.events.push({ kind, x, y, duration, max: duration, ...data });
-    battle.eventCounts[kind] = (battle.eventCounts[kind] || 0) + 1;
-  }
-
-  function centerOfMass(bot) {
-    let sx = 0;
-    let sy = 0;
-    let sm = 0;
-    for (const p of bot.parts) {
-      if (!p.alive) continue;
-      const m = PARTS[p.type].mass;
-      sx += (p.x - CORE_X) * m;
-      sy += (p.y - CORE_Y) * m;
-      sm += m;
-    }
-    return { x: sx / Math.max(1, sm), y: sy / Math.max(1, sm) };
-  }
-
-  function liveMass(bot) {
-    return bot.parts.reduce((sum, p) => (p.alive && !p.detached ? sum + PARTS[p.type].mass : sum), 0);
-  }
-
-  function damagePart(bot, part, amount, sx, sy, battle, tag = "") {
-    if (!part.alive || part.detached || amount <= 0) return;
-    if (part.type === "bomb" && part.fuse > 0) return;
-    const w = partWorld(bot, part, battle.cell);
-    let dmg = amount;
-    if (part.type === "shield" && tag !== "block" && shieldFacesSource(bot, part, sx, sy, battle.cell)) {
-      dmg *= 0.3;
-      if (tag) {
-        eventAt(battle, "block", w.x, w.y, 0.26, { targetId: part.id });
-        shieldClang(w.x, w.y, battle);
-      }
-    }
-    if (part.type === "weight") dmg *= 0.7;
-    part.hp -= dmg;
-    part.flash = 0.12;
-    if (part.type === "core") {
-      bot.coreFlash = 0.25;
-      battle.flash = 0.08;
-      battle.slow = Math.max(battle.slow, 0.08);
-      eventAt(battle, "coreHit", w.x, w.y, 0.24, { targetId: part.id });
-    }
-    if (part.hp <= 0) breakPart(bot, part, battle);
-  }
-
-  function breakPart(bot, part, battle) {
-    if (!part.alive) return;
-    if (part.type === "bomb" && part.fuse <= 0 && !part.broken) {
-      part.broken = true;
-      part.fuse = 0.28;
-      part.flash = 0.28;
-      eventAt(battle, "spark", partWorld(bot, part, battle.cell).x, partWorld(bot, part, battle.cell).y, 0.25, { targetId: part.id });
-      battle.shake = Math.max(battle.shake, 6);
-      return;
-    }
-    part.alive = false;
-    part.broken = true;
-    const w = partWorld(bot, part, battle.cell);
-    spawnDebris(part, w.x, w.y, battle, bot.facing);
-    burst(w.x, w.y, part.type === "core" ? 26 : 12, battle, part.type === "core" ? 1.6 : 1);
-    eventAt(battle, part.type === "core" ? "coreBreak" : "break", w.x, w.y, part.type === "core" ? 0.55 : 0.32, {
-      targetId: part.id,
-    });
-    if (part.type === "core") {
-      battle.slow = Math.max(battle.slow, 0.42);
-      battle.shake = Math.max(battle.shake, 18);
-    }
-    removeOrphans(bot, battle);
-  }
-
-  function removeOrphans(bot, battle) {
-    const live = bot.parts.filter((p) => p.alive);
-    const map = new Map(live.map((p) => [`${p.x},${p.y}`, p]));
-    const root = `${CORE_X},${CORE_Y}`;
-    if (!map.has(root)) {
-      for (const p of live) {
-        p.alive = false;
-        p.detached = true;
-        const w = partWorld(bot, p, battle.cell);
-        spawnDebris(p, w.x, w.y, battle, bot.facing);
-        burst(w.x, w.y, 8, battle, 0.9);
-      }
-      return;
-    }
-    const keep = new Set([root]);
-    const open = [{ x: CORE_X, y: CORE_Y }];
-    while (open.length) {
-      const c = open.pop();
-      for (const d of DIRS) {
-        const nx = c.x + d.x;
-        const ny = c.y + d.y;
-        const key = `${nx},${ny}`;
-        if (!map.has(key) || keep.has(key)) continue;
-        keep.add(key);
-        open.push({ x: nx, y: ny });
-      }
-    }
-    for (const p of live) {
-      if (keep.has(`${p.x},${p.y}`)) continue;
-      p.alive = false;
-      p.detached = true;
-      const w = partWorld(bot, p, battle.cell);
-      spawnDebris(p, w.x, w.y, battle, bot.facing);
-      eventAt(battle, "break", w.x, w.y, 0.25, { targetId: p.id, detached: true });
-      burst(w.x, w.y, 7, battle, 0.8);
-    }
-  }
-
-  function explodeBomb(owner, bomb, battle) {
-    if (!bomb.alive) return;
-    const w = partWorld(owner, bomb, battle.cell);
-    bomb.alive = false;
-    bomb.detached = true;
-    bomb.broken = true;
-    spawnDebris(bomb, w.x, w.y, battle, owner.facing);
-    explode(w.x, w.y, battle);
-    removeOrphans(owner, battle);
-  }
-
-  function explode(x, y, battle) {
-    battle.shake = Math.max(battle.shake, 18);
-    battle.flash = 0.16;
-    eventAt(battle, "explode", x, y, 0.48);
-    battle.particles.push({ kind: "boom", x, y, r: 8, life: 0.42, max: 0.42 });
-    for (const bot of [battle.player, battle.enemy]) {
-      for (const p of bot.parts) {
-        if (!p.alive) continue;
-        const w = partWorld(bot, p, battle.cell);
-        const d = Math.hypot(w.x - x, w.y - y);
-        if (d < battle.cell * 2.5) {
-          damagePart(bot, p, 8.0 * (1 - d / (battle.cell * 2.5)) + 1.2, x, y, battle, "bomb");
-        }
-      }
-    }
-  }
-
-  function spawnDebris(part, x, y, battle, facing) {
-    battle.debris.push({
-      type: part.type,
-      x,
-      y,
-      vx: (Math.random() * 80 + 40) * -facing + (Math.random() - 0.5) * 70,
-      vy: -110 - Math.random() * 80,
-      rot: Math.random() * Math.PI,
-      spin: (Math.random() - 0.5) * 7,
-      life: part.type === "core" ? 0.9 : 0.65,
-    });
-  }
-
-  function partWorld(bot, p, cell) {
-    const lx = (p.x - CORE_X) * cell * bot.facing;
-    const ly = (p.y - CORE_Y) * cell;
-    const c = Math.cos(bot.angle);
-    const s = Math.sin(bot.angle);
+  function blockWorld(bot, bl, scale) {
+    const lx = bl.localX * scale;
+    const ly = bl.localY * scale;
+    const c = Math.cos(bot.bodyAngle);
+    const s = Math.sin(bot.bodyAngle);
     return { x: bot.x + lx * c - ly * s, y: bot.y + lx * s + ly * c };
   }
 
-  function partDirection(bot, p) {
-    const rot = bot.facing === 1 ? p.rotation : MIRROR_ROT[p.rotation];
-    const d = DIRS[rot];
-    const c = Math.cos(bot.angle);
-    const s = Math.sin(bot.angle);
-    return norm({ x: d.x * c - d.y * s, y: d.x * s + d.y * c });
+  function nearestLiveBlockWorld(observer, foe, battle) {
+    const scale = battleScale(battle);
+    let best = null;
+    for (const bl of foe.blocks) {
+      if (!bl.alive) continue;
+      const p = blockWorld(foe, bl, scale);
+      const d = Math.hypot(p.x - observer.x, p.y - observer.y);
+      if (!best || d < best.d) best = { ...p, d };
+    }
+    return best || { x: foe.x, y: foe.y, d: 9999 };
   }
 
-  function norm(v) {
-    const l = Math.hypot(v.x, v.y) || 1;
-    return { x: v.x / l, y: v.y / l };
+  function botRadius(bot, battle) {
+    const scale = battleScale(battle);
+    let r = 24;
+    for (const bl of bot.blocks) {
+      if (!bl.alive) continue;
+      r = Math.max(r, Math.hypot(bl.localX * scale, bl.localY * scale) + scale);
+    }
+    return r;
   }
 
-  function burst(x, y, count, battle, scale = 1) {
+  function coreHp(bot) {
+    const core = bot.blocks.find((b) => b.type === "core");
+    return core && core.alive ? Math.max(0, core.hp) : 0;
+  }
+
+  function totalHp(bot) {
+    return bot.blocks.reduce((sum, b) => sum + (b.alive ? Math.max(0, b.hp) : 0), 0);
+  }
+
+  function spawnSpark(x, y, battle, count) {
     for (let i = 0; i < count; i += 1) {
-      const a = Math.random() * Math.PI * 2;
-      const s = (30 + Math.random() * 90) * scale;
-      battle.particles.push({
-        kind: "dot",
-        x,
-        y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s - 30,
-        life: 0.28 + Math.random() * 0.42,
-      });
+      const a = battle.rng() * Math.PI * 2;
+      battle.particles.push({ x, y, vx: Math.cos(a) * (30 + battle.rng() * 90), vy: Math.sin(a) * (30 + battle.rng() * 90), life: 0.24 + battle.rng() * 0.2, size: 2 + battle.rng() * 3 });
     }
   }
 
-  function spark(x, y, battle, count) {
+  function spawnBreak(x, y, battle, count) {
     for (let i = 0; i < count; i += 1) {
-      battle.particles.push({
-        kind: "spark",
-        x,
-        y,
-        vx: (Math.random() - 0.5) * 130,
-        vy: (Math.random() - 0.65) * 120,
-        life: 0.16 + Math.random() * 0.15,
-      });
+      const a = battle.rng() * Math.PI * 2;
+      battle.particles.push({ x, y, vx: Math.cos(a) * (45 + battle.rng() * 130), vy: Math.sin(a) * (45 + battle.rng() * 130), life: 0.45 + battle.rng() * 0.35, size: 3 + battle.rng() * 4 });
     }
-  }
-
-  function shock(x, y, battle) {
-    battle.particles.push({ kind: "shock", x, y, r: 4, life: 0.22, max: 0.22 });
-  }
-
-  function shieldClang(x, y, battle) {
-    battle.particles.push({ kind: "clang", x, y, r: 5, life: 0.2, max: 0.2 });
   }
 
   function updateParticles(battle, dt) {
     for (const p of battle.particles) {
       p.life -= dt;
-      if (p.kind === "dot" || p.kind === "spark") {
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vy += 150 * dt;
-      } else {
-        p.r += (p.kind === "boom" ? 190 : 115) * dt;
-      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
     }
     battle.particles = battle.particles.filter((p) => p.life > 0);
   }
@@ -1151,676 +957,496 @@
     ctx.clearRect(0, 0, state.w, state.h);
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, state.w, state.h);
-    ctx.lineCap = "square";
-    ctx.lineJoin = "miter";
-    if (state.mode === "fight" && state.battle) drawFight();
-    else drawGarage();
-    if (state.toastT > 0 && state.toast) {
+    drawTabs();
+    if (state.mode === "build") drawBuild();
+    else if (state.mode === "wire") drawWire();
+    else if (state.mode === "fight") drawFight();
+    else drawShare();
+    if (state.toastT > 0) {
       ctx.fillStyle = INK;
-      text(state.toast, state.w / 2, 28, 16, "center");
+      ctx.fillRect(state.w / 2 - 52, 46, 104, 26);
+      text(state.toast, state.w / 2, 60, 13, "center", PAPER);
     }
-  }
-
-  function drawGarage() {
-    const l = layoutGarage();
-    canvas.dataset.cell = String(l.gap);
-    canvas.dataset.screen = `${state.w}x${state.h}`;
-    canvas.dataset.inner = `${window.innerWidth}x${window.innerHeight}`;
     canvas.dataset.mode = state.mode;
-    canvas.dataset.parts = String(partCount());
-    text("GARAGE", l.pad, 18, 20, "left");
-    drawPartDots(state.w - l.pad - 86, 22);
-    drawGarageBot(l);
-    drawGarageSockets(l);
-    drawActionBar(l);
-    drawTray(l);
+    canvas.dataset.blocks = String(state.design.blocks.length);
+    canvas.dataset.logic = String(state.design.schematic.logicNodes.length);
+    canvas.dataset.wires = String(state.design.schematic.wires.length);
+    canvas.dataset.fight = state.battle
+      ? `${state.battle.t.toFixed(1)},${state.battle.bullets.length},${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))},${state.battle.result}`
+      : "";
+    canvas.dataset.signals = state.battle ? JSON.stringify(state.battle.player.sensors) : "";
+    canvas.dataset.debug = state.battle
+      ? JSON.stringify({
+          energy: Math.round(state.battle.player.energy),
+          maxEnergy: Math.round(state.battle.player.maxEnergy),
+          cooldown: Number(state.battle.player.gunCooldown.toFixed(2)),
+          guns: state.battle.player.stats.guns,
+          actions: state.battle.player.actions,
+          aimDiff: Number(Math.abs(angleDiff(state.battle.player.turretAngle, state.battle.player.lastSeenAngle)).toFixed(2)),
+        })
+      : "";
+    syncShareLayer();
   }
 
-  function drawPartDots(x, y) {
-    for (let i = 0; i < MAX_PARTS; i += 1) {
-      ctx.fillStyle = i < partCount() ? INK : PALE;
-      ctx.fillRect(x + i * 10, y, 6, 6);
-    }
-  }
-
-  function socketCells() {
-    const cells = [];
-    const seen = new Set();
-    for (const p of state.build.parts) {
-      for (const d of DIRS) {
-        const gx = p.x + d.x;
-        const gy = p.y + d.y;
-        const key = `${gx},${gy}`;
-        if (seen.has(key) || !canPlace(gx, gy)) continue;
-        seen.add(key);
-        cells.push({ x: gx, y: gy });
-      }
-    }
-    return cells;
-  }
-
-  function drawGarageSockets(l) {
-    ctx.save();
-    const cells = socketCells();
-    for (const c of cells) {
-      const p = garagePoint(l, c.x, c.y);
-      const hover = state.hoverCell && state.hoverCell.x === c.x && state.hoverCell.y === c.y;
-      const r = hover ? 13 : 10;
-      ctx.strokeStyle = INK;
-      ctx.fillStyle = hover ? INK : PAPER;
-      ctx.lineWidth = hover ? 4 : 3;
-      ctx.setLineDash(hover ? [] : [2, 5]);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (hover) {
-        ctx.save();
-        ctx.globalAlpha = 0.34;
-        const near = nearestGarageNeighbor(c.x, c.y);
-        if (near) {
-          const n = garagePoint(l, near.x, near.y);
-          ctx.strokeStyle = INK;
-          ctx.lineWidth = 9;
-          ctx.beginPath();
-          ctx.moveTo(n.x, n.y);
-          ctx.lineTo(p.x, p.y);
-          ctx.stroke();
-        }
-        drawPart(state.selectedType, p.x, p.y, l.partSize * 1.05, state.selectedRot, { mode: "garage" });
-        ctx.restore();
-      }
-      addHit("socket", p.x - 22, p.y - 22, 44, 44, { gx: c.x, gy: c.y });
-    }
-    ctx.restore();
-  }
-
-  function drawGarageBot(l) {
-    drawGarageConnections(l);
-    for (const p of state.build.parts) {
-      const g = garagePoint(l, p.x, p.y);
-      const selected = p.id === state.selectedPartId;
-      if (selected) {
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = 4;
-        ctx.setLineDash([8, 5]);
-        ctx.strokeRect(g.x - l.gap * 0.47, g.y - l.gap * 0.47, l.gap * 0.94, l.gap * 0.94);
-        ctx.setLineDash([]);
-      }
-      drawPart(p.type, g.x, g.y, p.type === "core" ? l.gap * 1.32 : l.partSize, p.rotation, {
-        mode: "garage",
-        flash: 0,
-      });
-      addHit("part", g.x - l.gap * 0.48, g.y - l.gap * 0.48, l.gap * 0.96, l.gap * 0.96, { id: p.id });
-    }
-  }
-
-  function nearestGarageNeighbor(gx, gy) {
-    for (const d of DIRS) {
-      const p = getAt(state.build.parts, gx + d.x, gy + d.y);
-      if (p) return p;
-    }
-    return null;
-  }
-
-  function drawGarageConnections(l) {
-    ctx.save();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = Math.max(8, Math.round(l.gap * 0.15));
-    ctx.lineCap = "square";
-    for (const p of state.build.parts) {
-      for (const d of [{ x: 1, y: 0 }, { x: 0, y: 1 }]) {
-        const q = getAt(state.build.parts, p.x + d.x, p.y + d.y);
-        if (!q) continue;
-        const a = garagePoint(l, p.x, p.y);
-        const b = garagePoint(l, q.x, q.y);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-        ctx.fillStyle = PAPER;
-        ctx.fillRect((a.x + b.x) / 2 - 4, (a.y + b.y) / 2 - 4, 8, 8);
-      }
-    }
-    ctx.restore();
-  }
-
-  function drawActionBar(l) {
-    const gap = 8;
-    const count = 4;
-    const bw = Math.floor((state.w - l.pad * 2 - gap * (count - 1)) / count);
-    const y = l.actionY;
-    const actions = ["rotate", "delete", "random", "fight"];
-    for (let i = 0; i < actions.length; i += 1) {
-      const x = l.pad + i * (bw + gap);
-      drawPanelButton(x, y, bw, l.actionH, actions[i]);
-      addHit(actions[i], x, y, bw, l.actionH);
-    }
-  }
-
-  function drawPanelButton(x, y, w, h, kind) {
-    ctx.fillStyle = kind === "fight" ? INK : PAPER;
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 4;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
-    const label = kind === "rotate" ? "ROTATE" : kind === "delete" ? "DELETE" : kind === "random" ? "RANDOM" : "FIGHT";
-    text(label, x + w / 2, y + h / 2 + 1, kind === "random" ? 13 : 14, "center", kind === "fight" ? PAPER : INK);
-  }
-
-  function drawTray(l) {
-    for (let i = 0; i < TRAY.length; i += 1) {
-      const type = TRAY[i];
-      const row = i < 4 ? 0 : 1;
-      const col = i < 4 ? i : i - 4;
-      const cols = row === 0 ? 4 : 3;
-      const rowW = cols * l.traySize + (cols - 1) * l.trayGap;
-      const x = Math.round((state.w - rowW) / 2 + col * (l.traySize + l.trayGap));
-      const y = l.trayY + row * (l.traySize + l.trayGap);
-      const active = state.selectedType === type && !state.selectedPartId;
+  function drawTabs() {
+    const tabs = ["build", "wire", "fight", "share"];
+    const labels = ["BUILD", "WIRE", "FIGHT", "SHARE"];
+    const w = state.w / tabs.length;
+    for (let i = 0; i < tabs.length; i += 1) {
+      const active = state.mode === tabs[i];
       ctx.fillStyle = active ? INK : PAPER;
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 4;
-      ctx.fillRect(x, y, l.traySize, l.traySize);
-      ctx.strokeRect(x, y, l.traySize, l.traySize);
-      drawPart(type, x + l.traySize / 2, y + l.traySize / 2, l.traySize * 0.78, defaultRotation(type), {
-        inverse: active,
-        mode: "tray",
-      });
-      addHit("tray", x, y, l.traySize, l.traySize, { type });
+      ctx.lineWidth = 3;
+      ctx.fillRect(i * w, 0, w, 38);
+      ctx.strokeRect(i * w, 0, w, 38);
+      text(labels[i], i * w + w / 2, 20, 13, "center", active ? PAPER : INK);
+      addHit("tab", i * w, 0, w, 38, { mode: tabs[i] });
     }
   }
 
-  function drawTinyButton(label, x, y, w, h, kind) {
+  function drawBuild() {
+    const l = buildLayout();
+    text(state.design.name, 16, 54, 15, "left");
+    drawBuildGrid(l);
+    drawBuildPalette(l);
+    drawBuildActions(l);
+  }
+
+  function buildLayout() {
+    const top = 70;
+    const gridSize = Math.floor(Math.min(state.w - 32, Math.max(230, state.h * 0.43)));
+    const cell = Math.floor(gridSize / GRID);
+    const size = cell * GRID;
+    return {
+      x: Math.floor((state.w - size) / 2),
+      y: top,
+      cell,
+      size,
+      paletteY: top + size + 18,
+      actionY: Math.min(state.h - 62, top + size + 112),
+    };
+  }
+
+  function drawBuildGrid(l) {
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(l.x - 3, l.y - 3, l.size + 6, l.size + 6);
+    for (let y = 0; y < GRID; y += 1) {
+      for (let x = 0; x < GRID; x += 1) {
+        const px = l.x + x * l.cell;
+        const py = l.y + y * l.cell;
+        const b = state.design.blocks.find((q) => q.x === x && q.y === y);
+        const place = canPlace(x, y);
+        ctx.strokeStyle = place ? "#999" : PALE;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px, py, l.cell, l.cell);
+        if (place && !b) {
+          ctx.fillStyle = "#eee";
+          ctx.fillRect(px + l.cell / 2 - 2, py + l.cell / 2 - 2, 4, 4);
+        }
+        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * 0.86, b.rot, { selected: b.id === state.selectedBlockId });
+        addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
+      }
+    }
+  }
+
+  function drawBuildPalette(l) {
+    const s = Math.min(54, Math.floor((state.w - 24) / PALETTE.length) - 6);
+    const total = PALETTE.length * s + (PALETTE.length - 1) * 6;
+    let x = (state.w - total) / 2;
+    for (const type of PALETTE) {
+      const active = state.selectedBlockType === type && !state.selectedBlockId;
+      ctx.fillStyle = active ? INK : PAPER;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      ctx.fillRect(x, l.paletteY, s, s);
+      ctx.strokeRect(x, l.paletteY, s, s);
+      drawBlockIcon(type, x + s / 2, l.paletteY + s / 2, s * 0.72, defaultRot(type), { inverse: active });
+      addHit("palette", x, l.paletteY, s, s, { type });
+      x += s + 6;
+    }
+  }
+
+  function drawBuildActions(l) {
+    const labels = [
+      ["ROTATE", "rotate"], ["DELETE", "delete"], ["RANDOM", "random"], ["WIRE", "wire"], ["FIGHT", "fight"],
+    ];
+    const gap = 6;
+    const w = Math.floor((state.w - 24 - gap * 4) / 5);
+    let x = 12;
+    for (const [label, kind] of labels) {
+      button(label, x, l.actionY, w, 44, kind === "fight");
+      addHit(kind, x, l.actionY, w, 44);
+      x += w + gap;
+    }
+  }
+
+  function drawWire() {
+    const l = wireLayout();
+    text("ONE SCHEMATIC", 16, 54, 15, "left");
+    drawWireColumns(l);
+    drawWireLines(l);
+    drawWireNodes(l);
+    drawWireTools(l);
+  }
+
+  function wireLayout() {
+    const top = 78;
+    const colW = Math.floor((state.w - 38) / 3);
+    return {
+      top,
+      nodeH: 27,
+      gap: 7,
+      colW,
+      sensorX: 12,
+      logicX: 19 + colW,
+      actionX: 26 + colW * 2,
+    };
+  }
+
+  function drawWireColumns(l) {
+    text("SENSOR", l.sensorX + l.colW / 2, 61, 10, "center");
+    text("LOGIC", l.logicX + l.colW / 2, 61, 10, "center");
+    text("ACTION", l.actionX + l.colW / 2, 61, 10, "center");
+  }
+
+  function nodeRect(kind, id, l) {
+    if (kind === "sensor") {
+      const i = SENSORS.findIndex(([x]) => x === id);
+      return { x: l.sensorX, y: l.top + i * (l.nodeH + l.gap), w: l.colW, h: l.nodeH };
+    }
+    if (kind === "action") {
+      const i = ACTIONS.findIndex(([x]) => x === id);
+      return { x: l.actionX, y: l.top + i * (l.nodeH + l.gap), w: l.colW, h: l.nodeH };
+    }
+    const i = state.design.schematic.logicNodes.findIndex((n) => n.id === id);
+    return { x: l.logicX, y: l.top + i * (l.nodeH + l.gap), w: l.colW, h: l.nodeH };
+  }
+
+  function endpointPoint(ep, l) {
+    if (ep.startsWith("sensor.")) {
+      const id = ep.slice(7);
+      const r = nodeRect("sensor", id, l);
+      return { x: r.x + r.w, y: r.y + r.h / 2 };
+    }
+    if (ep.startsWith("action.")) {
+      const id = ep.slice(7);
+      const r = nodeRect("action", id, l);
+      return { x: r.x, y: r.y + r.h / 2 };
+    }
+    const [id, port] = ep.split(".");
+    const r = nodeRect("logic", id, l);
+    if (port === "out") return { x: r.x + r.w, y: r.y + r.h / 2 };
+    const input = Number((port || "in0").replace("in", "")) || 0;
+    const node = state.design.schematic.logicNodes.find((n) => n.id === id);
+    const n = Math.max(1, LOGIC_TYPES[node?.type]?.inputs || 1);
+    return { x: r.x, y: r.y + ((input + 1) * r.h) / (n + 1) };
+  }
+
+  function drawWireLines(l) {
+    const wires = state.design.schematic.wires;
+    for (let i = 0; i < wires.length; i += 1) {
+      const a = endpointPoint(wires[i].from, l);
+      const b = endpointPoint(wires[i].to, l);
+      const active = signalValue(wires[i].from);
+      ctx.strokeStyle = active ? INK : "#999";
+      ctx.lineWidth = active ? 5 : 2;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      const mid = (a.x + b.x) / 2;
+      ctx.bezierCurveTo(mid, a.y, mid, b.y, b.x, b.y);
+      ctx.stroke();
+      const hx = Math.min(a.x, b.x);
+      const hy = Math.min(a.y, b.y) - 6;
+      addHit("wireLine", hx, hy, Math.abs(b.x - a.x), Math.abs(b.y - a.y) + 12, { index: i });
+    }
+    if (state.wireFrom) {
+      const p = endpointPoint(state.wireFrom, l);
+      ctx.fillStyle = INK;
+      ctx.fillRect(p.x - 5, p.y - 5, 10, 10);
+      text("TO?", state.w / 2, state.h - 26, 14, "center");
+    }
+  }
+
+  function drawWireNodes(l) {
+    for (const [id, label] of SENSORS) drawNodeBox(nodeRect("sensor", id, l), label, signalValue(`sensor.${id}`), "out", `sensor.${id}`);
+    for (const node of state.design.schematic.logicNodes) {
+      const r = nodeRect("logic", node.id, l);
+      drawNodeBox(r, LOGIC_TYPES[node.type].label, signalValue(`${node.id}.out`), "both", node.id, LOGIC_TYPES[node.type].inputs, node.id === state.selectedLogicId);
+      addHit("logic", r.x, r.y, r.w, r.h, { id: node.id });
+    }
+    for (const [id, label] of ACTIONS) drawNodeBox(nodeRect("action", id, l), label, false, "in", `action.${id}`);
+  }
+
+  function drawNodeBox(r, label, active, ports, endpoint, inputs = 1, selected = false) {
+    ctx.fillStyle = active ? INK : PAPER;
+    ctx.strokeStyle = selected ? INK : "#111";
+    ctx.lineWidth = selected ? 4 : 2;
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    text(label, r.x + r.w / 2, r.y + r.h / 2 + 1, 9, "center", active ? PAPER : INK);
+    if (ports === "out" || ports === "both") {
+      port(r.x + r.w, r.y + r.h / 2, "portOut", endpoint.includes(".") ? endpoint : `${endpoint}.out`);
+    }
+    if (ports === "in" || ports === "both") {
+      const n = Math.max(1, inputs);
+      for (let i = 0; i < n; i += 1) port(r.x, r.y + ((i + 1) * r.h) / (n + 1), "portIn", ports === "in" ? endpoint : `${endpoint}.in${i}`);
+    }
+  }
+
+  function port(x, y, kind, endpoint) {
+    ctx.fillStyle = PAPER;
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, w, h);
-    text(label, x + w / 2, y + h / 2 + 1, 11, "center");
-    addHit(kind, x, y, w, h);
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    addHit(kind, x - 11, y - 11, 22, 22, { endpoint });
+  }
+
+  function drawWireTools(l) {
+    const types = ["and", "or", "not", "timer", "random"];
+    const bw = Math.floor((state.w - 28) / 6);
+    const y = state.h - 50;
+    let x = 8;
+    for (const t of types) {
+      button(`+${LOGIC_TYPES[t].label}`, x, y, bw, 38, false, 10);
+      addHit("addLogic", x, y, bw, 38, { type: t });
+      x += bw + 4;
+    }
+    button("DEL", x, y, bw, 38, false, 11);
+    addHit("deleteLogic", x, y, bw, 38);
+    button("FIGHT", state.w - 78, 42, 66, 28, true, 11);
+    addHit("fight", state.w - 78, 42, 66, 28);
+  }
+
+  function signalValue(endpoint) {
+    if (endpoint.startsWith("sensor.")) return !!state.battle?.player?.sensors?.[endpoint.slice(7)];
+    return !!state.lastSignals?.[endpoint];
   }
 
   function drawFight() {
     const b = state.battle;
-    const sx = b.shake ? (Math.random() - 0.5) * b.shake : 0;
-    const sy = b.shake ? (Math.random() - 0.5) * b.shake * 0.5 : 0;
-    ctx.save();
-    ctx.translate(Math.round(sx), Math.round(sy));
-    text("FIGHT", 18, 18, 20, "left");
-    drawFightHp(18, 50, coreHp(b.player), false);
-    drawFightHp(state.w - 106, 50, coreHp(b.enemy), true);
-    drawEnemyMark(b.enemyName);
-    drawGround();
-    drawBot(b.player, b.cell, b);
-    drawBot(b.enemy, b.cell, b);
-    drawDebris(b);
-    drawBattleEvents(b);
+    if (!b) return;
+    drawArena(b);
+    drawBattleBot(b.player, b);
+    drawBattleBot(b.enemy, b);
+    drawBullets(b);
     drawParticles(b);
-    ctx.restore();
-    if (b.flash > 0) {
-      ctx.globalAlpha = b.flash * 2.8;
-      ctx.fillStyle = INK;
-      ctx.fillRect(0, 0, state.w, state.h);
-      ctx.globalAlpha = 1;
-    }
-    if (b.pending && !b.result) {
-      text(b.pending, state.w / 2, state.h * 0.24, 42, "center");
-    }
-    if (b.result) drawResult(b.result);
+    drawFightHud(b);
+    drawMiniCircuit(b);
   }
 
-  function drawFightHp(x, y, hp, reverse) {
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, 88, 12);
-    const w = clamp(hp / PARTS.core.hp, 0, 1) * 82;
-    ctx.fillStyle = INK;
-    if (reverse) ctx.fillRect(x + 85 - w, y + 3, w, 6);
-    else ctx.fillRect(x + 3, y + 3, w, 6);
-  }
-
-  function drawEnemyMark(name) {
-    const x = state.w / 2;
-    const y = 56;
-    for (let i = 0; i < Math.min(6, state.enemyIndex + 1); i += 1) {
-      ctx.fillStyle = INK;
-      ctx.fillRect(x - 23 + i * 9, y, 5, 5);
-    }
-    if (name === "DEF") text("DEF", x, y + 10, 10, "center");
-  }
-
-  function drawGround() {
-    const g = fightGround();
-    ctx.fillStyle = INK;
-    ctx.fillRect(0, g + 4, state.w, 5);
-    for (let x = 0; x < state.w; x += 34) ctx.fillRect(x, g + 18 + ((x / 34) % 2) * 3, 16, 3);
-  }
-
-  function drawBot(bot, cell, battle) {
-    const parts = bot.parts.filter((p) => p.alive).sort((a, b) => a.y - b.y);
-    drawBattleConnections(bot, cell);
-    for (const p of parts) {
-      const w = partWorld(bot, p, cell);
-      const rot = bot.facing === 1 ? p.rotation : MIRROR_ROT[p.rotation];
-      const extra = (p.swing ? Math.sin((p.swing / 0.32) * Math.PI) * bot.facing * 0.82 : 0) +
-        (p.windup ? -Math.sin((p.windup / 0.26) * Math.PI) * bot.facing * 0.34 : 0) +
-        (p.bite ? Math.sin((p.bite / 0.18) * Math.PI) * bot.facing * 0.24 : 0);
-      if (p.type === "hammer" && p.swing) drawHammerTrail(w.x, w.y, cell, rot, bot.facing, p.swing);
-      drawPart(p.type, w.x, w.y, cell * (p.type === "core" ? 1.22 : 1.04), rot, {
-        bodyAngle: bot.angle + extra,
-        flash: p.flash || (p.type === "core" ? bot.coreFlash : 0),
-        time: battle.t,
-        mode: "fight",
-        hpRatio: p.maxHp ? p.hp / p.maxHp : 1,
-      });
-    }
-  }
-
-  function drawBattleConnections(bot, cell) {
-    ctx.save();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = Math.max(6, cell * 0.13);
-    for (const p of bot.parts) {
-      if (!p.alive) continue;
-      for (const d of [{ x: 1, y: 0 }, { x: 0, y: 1 }]) {
-        const q = bot.parts.find((part) => part.alive && part.x === p.x + d.x && part.y === p.y + d.y);
-        if (!q) continue;
-        const a = partWorld(bot, p, cell);
-        const b = partWorld(bot, q, cell);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-        ctx.fillStyle = PAPER;
-        ctx.fillRect((a.x + b.x) / 2 - 3, (a.y + b.y) / 2 - 3, 6, 6);
-      }
-    }
-    ctx.restore();
-  }
-
-  function drawHammerTrail(x, y, cell, rot, facing, swing) {
-    const progress = 1 - swing / 0.32;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(((rot - 1) * Math.PI) / 2);
+  function drawArena(b) {
+    const ar = b.arena = fightArena();
     ctx.strokeStyle = INK;
     ctx.lineWidth = 4;
-    ctx.globalAlpha = 0.45;
+    ctx.strokeRect(ar.x, ar.y, ar.w, ar.h);
+    for (let x = ar.x + 18; x < ar.x + ar.w; x += 28) {
+      ctx.fillStyle = PALE;
+      ctx.fillRect(x, ar.y + ar.h / 2, 8, 2);
+    }
+  }
+
+  function drawBattleBot(bot, battle) {
+    const scale = battleScale(battle);
+    if (bot.stats.radars > 0) drawRadarCone(bot, battle);
+    for (const bl of bot.blocks) {
+      if (!bl.alive) continue;
+      const p = blockWorld(bot, bl, scale);
+      const rot = bot.bodyAngle + bl.rot * Math.PI / 2;
+      drawBlockTop(bl.type, p.x, p.y, scale, rot, { flash: bl.flash, side: bot.side });
+    }
+    drawTurret(bot, battle);
+  }
+
+  function drawRadarCone(bot, battle) {
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = INK;
     ctx.beginPath();
-    ctx.arc(cell * 0.1 * facing, 0, cell * 0.68, -0.8 + progress * 0.45, 0.55 + progress * 0.45);
-    ctx.stroke();
+    ctx.moveTo(bot.x, bot.y);
+    ctx.arc(bot.x, bot.y, Math.min(bot.radarRange, battle.arena.w * 0.75), bot.radarAngle - bot.radarFov, bot.radarAngle + bot.radarFov);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
-    ctx.globalAlpha = 1;
   }
 
-  function drawDebris(battle) {
-    for (const d of battle.debris) {
-      ctx.save();
-      ctx.globalAlpha = clamp(d.life / 0.35, 0, 1);
-      ctx.translate(d.x, d.y);
-      ctx.rotate(d.rot);
-      drawPart(d.type, 0, 0, battle.cell * (d.type === "core" ? 0.85 : 0.68), 1, { mode: "fight" });
-      ctx.restore();
-    }
-    ctx.globalAlpha = 1;
+  function drawTurret(bot, battle) {
+    const scale = battleScale(battle);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(bot.x, bot.y);
+    ctx.lineTo(bot.x + Math.cos(bot.turretAngle) * scale * 2.1, bot.y + Math.sin(bot.turretAngle) * scale * 2.1);
+    ctx.stroke();
+    ctx.strokeStyle = bot.sensors.enemySeen ? INK : "#999";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(bot.x, bot.y);
+    ctx.lineTo(bot.x + Math.cos(bot.radarAngle) * scale * 2.5, bot.y + Math.sin(bot.radarAngle) * scale * 2.5);
+    ctx.stroke();
   }
 
-  function drawBattleEvents(battle) {
-    for (const e of battle.events) {
-      const t = clamp(e.duration / Math.max(0.001, e.max || e.duration), 0, 1);
-      ctx.save();
-      ctx.globalAlpha = clamp(t * 1.4, 0, 1);
-      ctx.strokeStyle = INK;
-      ctx.fillStyle = INK;
-      if (e.kind === "stab") {
-        ctx.lineWidth = 4;
-        for (let i = 0; i < 4; i += 1) {
-          const a = i * Math.PI * 0.5 + t;
-          ctx.beginPath();
-          ctx.moveTo(e.x, e.y);
-          ctx.lineTo(e.x + Math.cos(a) * (10 + 12 * t), e.y + Math.sin(a) * (10 + 12 * t));
-          ctx.stroke();
-        }
-      } else if (e.kind === "block") {
-        ctx.lineWidth = 5;
-        ctx.beginPath();
-        ctx.moveTo(e.x - 22 * t, e.y - 18);
-        ctx.lineTo(e.x - 7 * t, e.y - 5);
-        ctx.moveTo(e.x + 22 * t, e.y + 18);
-        ctx.lineTo(e.x + 7 * t, e.y + 5);
-        ctx.moveTo(e.x - 18, e.y + 16 * t);
-        ctx.lineTo(e.x + 18, e.y - 16 * t);
-        ctx.stroke();
-      } else if (e.kind === "hammer") {
-        ctx.lineWidth = e.hit ? 7 : 4;
-        ctx.beginPath();
-        ctx.arc(e.x, e.y, 8 + (1 - t) * 34, -0.35, Math.PI * 1.15);
-        ctx.stroke();
-      } else if (e.kind === "explode") {
-        ctx.lineWidth = 7;
-        jaggedCircle(e.x, e.y, 18 + (1 - t) * 62, 14);
-        ctx.stroke();
-      } else if (e.kind === "break" || e.kind === "coreBreak") {
-        ctx.lineWidth = e.kind === "coreBreak" ? 7 : 4;
-        jaggedCircle(e.x, e.y, 10 + (1 - t) * (e.kind === "coreBreak" ? 48 : 24), 10);
-        ctx.stroke();
-      } else if (e.kind === "coreHit") {
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(e.x - 12, e.y - 16);
-        ctx.lineTo(e.x + 4, e.y - 2);
-        ctx.lineTo(e.x - 8, e.y + 12);
-        ctx.moveTo(e.x + 14, e.y - 8);
-        ctx.lineTo(e.x + 2, e.y + 8);
-        ctx.stroke();
-      } else if (e.kind === "recoil") {
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(e.x, e.y - 34 * t);
-        ctx.lineTo(e.x, e.y + 34 * t);
-        ctx.stroke();
-      } else if (e.kind === "spark") {
-        for (let i = 0; i < 5; i += 1) ctx.fillRect(e.x + i * 5 - 12, e.y + ((i % 2) * 8 - 4), 4, 4);
-      }
-      ctx.restore();
-    }
-    ctx.globalAlpha = 1;
+  function drawBullets(battle) {
+    ctx.fillStyle = INK;
+    for (const bullet of battle.bullets) ctx.fillRect(bullet.x - 3, bullet.y - 3, 6, 6);
   }
 
   function drawParticles(battle) {
-    for (const p of battle.particles) {
-      if (p.kind === "dot") {
-        ctx.fillStyle = INK;
-        ctx.fillRect(Math.round(p.x), Math.round(p.y), 4, 4);
-      } else if (p.kind === "spark") {
-        ctx.fillStyle = INK;
-        ctx.fillRect(Math.round(p.x), Math.round(p.y), 6, 3);
-      } else if (p.kind === "shock" || p.kind === "clang") {
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = p.kind === "clang" ? 5 : 3;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.stroke();
-        if (p.kind === "clang") {
-          ctx.beginPath();
-          ctx.moveTo(p.x - p.r - 6, p.y - 7);
-          ctx.lineTo(p.x - p.r - 18, p.y - 16);
-          ctx.moveTo(p.x + p.r + 6, p.y + 7);
-          ctx.lineTo(p.x + p.r + 18, p.y + 16);
-          ctx.stroke();
-        }
-      } else if (p.kind === "boom") {
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = 6;
-        jaggedCircle(p.x, p.y, p.r, 12);
-        ctx.stroke();
-        ctx.lineWidth = 2;
-        jaggedCircle(p.x, p.y, p.r * 0.58, 8);
-        ctx.stroke();
-      }
-    }
+    ctx.fillStyle = INK;
+    for (const p of battle.particles) ctx.fillRect(p.x, p.y, p.size, p.size);
   }
 
-  function drawResult(result) {
-    const vw = Math.min(state.w, Math.round(canvas.getBoundingClientRect().width || state.w), Math.round(window.innerWidth || state.w));
-    const vh = Math.min(state.h, Math.round(canvas.getBoundingClientRect().height || state.h), Math.round(window.innerHeight || state.h));
-    const y = vh * 0.23;
-    text(result, vw / 2, y, 52, "center");
-    const bw = Math.min(84, (vw - 56) / 3);
-    const gap = 8;
-    const x0 = (vw - bw * 3 - gap * 2) / 2;
-    const by = Math.min(vh - 92, y + 68);
-    const buttons = [
-      ["RETRY", "retry"],
-      ["GARAGE", "garage"],
-      ["NEXT", "next"],
-    ];
-    for (let i = 0; i < buttons.length; i += 1) {
-      const x = x0 + i * (bw + gap);
-      ctx.fillStyle = i === 1 ? INK : PAPER;
+  function drawFightHud(b) {
+    text(`${state.design.name}`, 12, 50, 10, "left");
+    text(`${b.enemy.design.name}`, state.w - 12, 50, 10, "right");
+    hpBar(12, 62, 116, coreHp(b.player), BLOCKS.core.hp);
+    hpBar(state.w - 128, 62, 116, coreHp(b.enemy), BLOCKS.core.hp);
+    energyBar(12, 78, 116, b.player.energy, b.player.maxEnergy);
+    text(`${Math.floor(Math.max(0, MAX_FIGHT - b.t))}`, state.w / 2, 54, 18, "center");
+    const y = state.h - 46;
+    button("RESTART", 10, y, 78, 34, false, 11);
+    button("NEXT", 96, y, 58, 34, false, 11);
+    button("BUILD", state.w - 154, y, 68, 34, false, 11);
+    button("SHARE", state.w - 78, y, 68, 34, false, 11);
+    addHit("restart", 10, y, 78, 34);
+    addHit("nextEnemy", 96, y, 58, 34);
+    addHit("build", state.w - 154, y, 68, 34);
+    addHit("share", state.w - 78, y, 68, 34);
+    if (b.result) {
+      ctx.fillStyle = PAPER;
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 4;
-      ctx.fillRect(x, by, bw, 50);
-      ctx.strokeRect(x, by, bw, 50);
-      text(buttons[i][0], x + bw / 2, by + 26, 14, "center", i === 1 ? PAPER : INK);
-      addHit(buttons[i][1], x, by, bw, 50);
+      ctx.lineWidth = 5;
+      ctx.fillRect(state.w / 2 - 98, state.h * 0.36 - 48, 196, 96);
+      ctx.strokeRect(state.w / 2 - 98, state.h * 0.36 - 48, 196, 96);
+      text(b.result, state.w / 2, state.h * 0.36 - 10, 34, "center");
+      text(b.reason, state.w / 2, state.h * 0.36 + 25, 13, "center");
     }
   }
 
-  function drawPart(type, x, y, size, rotation = 0, opt = {}) {
-    const ink = opt.inverse ? PAPER : INK;
-    const paper = opt.inverse ? INK : PAPER;
-    const flash = opt.flash || 0;
+  function hpBar(x, y, w, hp, max) {
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, 9);
+    ctx.fillStyle = INK;
+    ctx.fillRect(x + 2, y + 2, (w - 4) * clamp(hp / max, 0, 1), 5);
+  }
+
+  function energyBar(x, y, w, energy, max) {
+    ctx.strokeStyle = "#777";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, 7);
+    ctx.fillStyle = "#777";
+    ctx.fillRect(x + 2, y + 2, (w - 4) * clamp(energy / Math.max(1, max), 0, 1), 3);
+  }
+
+  function drawMiniCircuit(b) {
+    const x = 12;
+    const y = state.h - 94;
+    const items = [
+      ["SEE", b.player.sensors.enemySeen],
+      ["GUN", b.player.sensors.gunReady],
+      ["AIM", b.player.actions.aimAtEnemy],
+      ["FIRE", b.player.actions.fire],
+      ["MOVE", b.player.actions.moveForward || b.player.actions.moveBackward],
+    ];
+    let px = x;
+    for (const [label, on] of items) {
+      ctx.fillStyle = on ? INK : PAPER;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.fillRect(px, y, 44, 20);
+      ctx.strokeRect(px, y, 44, 20);
+      text(label, px + 22, y + 11, 8, "center", on ? PAPER : INK);
+      px += 48;
+    }
+  }
+
+  function drawShare() {
+    text("BOT CODE", 16, 58, 15, "left");
+    text("Export current BOT. Import a rival code without network.", 16, 86, 10, "left");
+    if (state.opponent) text(`OPPONENT: ${state.opponent.name}`, 16, state.h - 110, 12, "left");
+    button("FIGHT IMPORTED", 16, state.h - 72, state.w - 32, 42, true, 14);
+    addHit("fightImported", 16, state.h - 72, state.w - 32, 42);
+  }
+
+  function drawBlockIcon(type, x, y, size, rot = 0, opt = {}) {
+    drawBlockTop(type, x, y, size, rot * Math.PI / 2, opt);
+  }
+
+  function drawBlockTop(type, x, y, s, rot = 0, opt = {}) {
     ctx.save();
     ctx.translate(Math.round(x), Math.round(y));
-    ctx.rotate((type === "core" ? 0 : ((rotation - 1) * Math.PI) / 2) + (opt.bodyAngle || 0));
-    ctx.strokeStyle = flash ? PAPER : ink;
+    ctx.rotate(rot);
+    const inverse = opt.inverse;
+    const flash = opt.flash > 0;
+    const ink = inverse || flash ? PAPER : INK;
+    const paper = inverse || flash ? INK : PAPER;
     ctx.fillStyle = paper;
-    ctx.lineWidth = Math.max(3, Math.round(size / (opt.mode === "tray" ? 9 : 8)));
-    if (type === "core") drawCore(size, ink, paper, flash, opt.hpRatio ?? 1);
-    else if (type === "leg") drawLeg(size, ink);
-    else if (type === "wheel") drawWheel(size, ink, paper);
-    else if (type === "spike") drawSpike(size, ink, paper);
-    else if (type === "shield") drawShield(size, ink, paper);
-    else if (type === "hammer") drawHammer(size, ink);
-    else if (type === "weight") drawWeight(size, ink);
-    else if (type === "wing") drawWing(size, ink);
-    else if (type === "spring") drawSpring(size, ink);
-    else if (type === "bomb") drawBomb(size, ink, paper);
-    else if (type === "jaw") drawJaw(size, ink, paper);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = Math.max(2, Math.round(s / 7));
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.strokeRect(-s / 2, -s / 2, s, s);
+    if (opt.selected) {
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(-s / 2 - 4, -s / 2 - 4, s + 8, s + 8);
+    }
+    ctx.fillStyle = ink;
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = Math.max(2, s / 11);
+    if (type === "core") {
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillRect(-s * 0.08, -s * 0.08, s * 0.16, s * 0.16);
+    } else if (type === "wheel") {
+      ctx.fillRect(-s * 0.45, -s * 0.32, s * 0.15, s * 0.64);
+      ctx.fillRect(s * 0.3, -s * 0.32, s * 0.15, s * 0.64);
+      ctx.fillRect(-s * 0.2, -s * 0.08, s * 0.4, s * 0.16);
+    } else if (type === "gun") {
+      ctx.fillRect(-s * 0.16, -s * 0.16, s * 0.32, s * 0.32);
+      ctx.fillRect(0, -s * 0.08, s * 0.46, s * 0.16);
+      ctx.fillRect(s * 0.4, -s * 0.13, s * 0.12, s * 0.26);
+    } else if (type === "radar") {
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.23, -0.8, 0.8);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.35, -0.8, 0.8);
+      ctx.stroke();
+      ctx.fillRect(-s * 0.06, -s * 0.06, s * 0.12, s * 0.12);
+      ctx.fillRect(0, -s * 0.04, s * 0.35, s * 0.08);
+    } else if (type === "armor") {
+      ctx.lineWidth = Math.max(3, s / 5.5);
+      ctx.strokeRect(-s * 0.36, -s * 0.36, s * 0.72, s * 0.72);
+      ctx.lineWidth = Math.max(2, s / 13);
+      ctx.beginPath();
+      ctx.moveTo(s * 0.22, -s * 0.34);
+      ctx.lineTo(s * 0.22, s * 0.34);
+      ctx.stroke();
+    } else if (type === "battery") {
+      ctx.strokeRect(-s * 0.28, -s * 0.26, s * 0.48, s * 0.52);
+      ctx.fillRect(s * 0.2, -s * 0.1, s * 0.12, s * 0.2);
+      ctx.fillRect(-s * 0.18, -s * 0.06, s * 0.24, s * 0.12);
+      ctx.fillRect(-s * 0.08, -s * 0.16, s * 0.05, s * 0.32);
+    }
     ctx.restore();
   }
 
-  function drawCore(s, ink, paper, flash, hpRatio = 1) {
-    ctx.fillStyle = flash ? ink : paper;
-    ctx.strokeStyle = ink;
-    ctx.beginPath();
-    ctx.ellipse(0, s * 0.04, s * 0.38, s * 0.48, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.strokeStyle = flash ? paper : ink;
-    ctx.lineWidth = Math.max(2, s / 13);
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.06, -s * 0.24);
-    ctx.lineTo(s * 0.06, -s * 0.1);
-    ctx.lineTo(-s * 0.02, s * 0.04);
-    ctx.lineTo(s * 0.12, s * 0.2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.16, s * 0.08);
-    ctx.lineTo(-s * 0.02, s * 0.15);
-    ctx.lineTo(-s * 0.12, s * 0.29);
-    ctx.stroke();
-    if (hpRatio < 0.7) {
-      ctx.beginPath();
-      ctx.moveTo(s * 0.14, -s * 0.23);
-      ctx.lineTo(s * 0.03, -s * 0.02);
-      ctx.lineTo(s * 0.19, s * 0.08);
-      ctx.stroke();
-    }
-    if (hpRatio < 0.35) {
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.22, -s * 0.12);
-      ctx.lineTo(-s * 0.02, -s * 0.04);
-      ctx.lineTo(-s * 0.2, s * 0.08);
-      ctx.stroke();
-    }
-    ctx.fillStyle = flash ? paper : ink;
-    ctx.fillRect(-s * 0.07, -s * 0.03, s * 0.14, s * 0.14);
+  function button(label, x, y, w, h, active = false, size = 12) {
+    ctx.fillStyle = active ? INK : PAPER;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    text(label, x + w / 2, y + h / 2 + 1, size, "center", active ? PAPER : INK);
   }
 
-  function drawLeg(s, ink) {
-    ctx.fillStyle = ink;
-    ctx.fillRect(-s * 0.34, -s * 0.24, s * 0.5, s * 0.14);
-    ctx.fillRect(-s * 0.34, s * 0.1, s * 0.5, s * 0.14);
-    ctx.fillRect(s * 0.02, -s * 0.34, s * 0.16, s * 0.28);
-    ctx.fillRect(s * 0.02, s * 0.06, s * 0.16, s * 0.28);
-    ctx.fillRect(s * 0.1, -s * 0.4, s * 0.34, s * 0.12);
-    ctx.fillRect(s * 0.1, s * 0.28, s * 0.34, s * 0.12);
-    ctx.fillRect(s * 0.36, -s * 0.3, s * 0.12, s * 0.08);
-    ctx.fillRect(s * 0.36, s * 0.22, s * 0.12, s * 0.08);
-  }
-
-  function drawWheel(s, ink, paper) {
-    ctx.fillStyle = paper;
-    ctx.strokeStyle = ink;
-    ctx.beginPath();
-    ctx.arc(0, 0, s * 0.43, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, 0, s * 0.21, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    for (let a = 0; a < Math.PI * 2; a += Math.PI / 3) {
-      ctx.fillRect(Math.cos(a) * s * 0.31 - 2, Math.sin(a) * s * 0.31 - 2, 4, 4);
-    }
-  }
-
-  function drawSpike(s, ink, paper) {
-    ctx.fillStyle = paper;
-    ctx.strokeStyle = ink;
-    ctx.beginPath();
-    ctx.moveTo(s * 0.58, 0);
-    ctx.lineTo(-s * 0.26, -s * 0.38);
-    ctx.lineTo(-s * 0.12, -s * 0.08);
-    ctx.lineTo(-s * 0.34, s * 0.06);
-    ctx.lineTo(-s * 0.16, s * 0.36);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    ctx.fillRect(-s * 0.28, -s * 0.09, s * 0.33, s * 0.18);
-  }
-
-  function drawShield(s, ink, paper) {
-    ctx.fillStyle = paper;
-    ctx.strokeStyle = ink;
-    ctx.beginPath();
-    ctx.moveTo(s * 0.38, -s * 0.44);
-    ctx.lineTo(-s * 0.3, -s * 0.32);
-    ctx.lineTo(-s * 0.3, s * 0.32);
-    ctx.lineTo(s * 0.38, s * 0.44);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    ctx.fillRect(s * 0.3, -s * 0.42, s * 0.12, s * 0.84);
-    ctx.fillRect(-s * 0.08, -s * 0.25, s * 0.09, s * 0.5);
-  }
-
-  function drawHammer(s, ink) {
-    ctx.fillStyle = ink;
-    ctx.fillRect(-s * 0.4, -s * 0.05, s * 0.58, s * 0.1);
-    ctx.fillRect(s * 0.08, -s * 0.38, s * 0.2, s * 0.76);
-    ctx.beginPath();
-    ctx.arc(s * 0.28, -s * 0.36, s * 0.1, 0, Math.PI * 2);
-    ctx.arc(s * 0.28, s * 0.36, s * 0.1, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function drawWeight(s, ink) {
-    ctx.fillStyle = ink;
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.44, s * 0.26);
-    ctx.lineTo(-s * 0.3, -s * 0.34);
-    ctx.lineTo(s * 0.24, -s * 0.42);
-    ctx.lineTo(s * 0.44, s * 0.14);
-    ctx.lineTo(s * 0.12, s * 0.42);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = PAPER;
-    ctx.fillRect(-s * 0.11, -s * 0.18, s * 0.12, s * 0.09);
-  }
-
-  function drawWing(s, ink) {
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(2, s / 12);
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.38, s * 0.28);
-    ctx.quadraticCurveTo(-s * 0.02, -s * 0.44, s * 0.42, -s * 0.12);
-    ctx.quadraticCurveTo(s * 0.08, s * 0.12, -s * 0.38, s * 0.28);
-    ctx.stroke();
-    for (let i = 0; i < 3; i += 1) {
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.16 + i * s * 0.13, s * 0.12 - i * s * 0.06);
-      ctx.lineTo(s * 0.18 + i * s * 0.06, -s * 0.1 - i * s * 0.02);
-      ctx.stroke();
-    }
-  }
-
-  function drawSpring(s, ink) {
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(3, s / 9);
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.38, -s * 0.2);
-    ctx.lineTo(-s * 0.22, s * 0.24);
-    ctx.lineTo(-s * 0.06, -s * 0.24);
-    ctx.lineTo(s * 0.1, s * 0.24);
-    ctx.lineTo(s * 0.26, -s * 0.24);
-    ctx.lineTo(s * 0.4, s * 0.18);
-    ctx.stroke();
-  }
-
-  function drawBomb(s, ink, paper) {
-    ctx.fillStyle = paper;
-    ctx.strokeStyle = ink;
-    ctx.beginPath();
-    ctx.ellipse(0, s * 0.03, s * 0.36, s * 0.46, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.12, -s * 0.3);
-    ctx.lineTo(s * 0.09, -s * 0.12);
-    ctx.lineTo(-s * 0.05, s * 0.02);
-    ctx.lineTo(s * 0.15, s * 0.2);
-    ctx.moveTo(-s * 0.18, s * 0.08);
-    ctx.lineTo(0, s * 0.18);
-    ctx.lineTo(-s * 0.09, s * 0.32);
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    ctx.fillRect(s * 0.08, -s * 0.42, s * 0.08, s * 0.13);
-    ctx.fillRect(s * 0.16, -s * 0.48, s * 0.15, s * 0.06);
-  }
-
-  function drawJaw(s, ink, paper) {
-    ctx.strokeStyle = ink;
-    ctx.fillStyle = paper;
-    ctx.lineWidth = Math.max(2, s / 9);
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.36, -s * 0.22);
-    ctx.lineTo(s * 0.4, -s * 0.08);
-    ctx.lineTo(-s * 0.26, s * 0.04);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-s * 0.34, s * 0.13);
-    ctx.lineTo(s * 0.42, s * 0.25);
-    ctx.lineTo(-s * 0.25, s * 0.34);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    for (let i = 0; i < 4; i += 1) {
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.03 + i * s * 0.12, -s * 0.06);
-      ctx.lineTo(s * 0.03 + i * s * 0.12, s * 0.04);
-      ctx.lineTo(-s * 0.06 + i * s * 0.12, s * 0.02);
-      ctx.fill();
-    }
-  }
-
-  function jaggedCircle(x, y, r, n) {
-    ctx.beginPath();
-    for (let i = 0; i <= n; i += 1) {
-      const a = (i / n) * Math.PI * 2;
-      const rr = r * (i % 2 ? 0.74 : 1);
-      const px = x + Math.cos(a) * rr;
-      const py = y + Math.sin(a) * rr;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
+  function addHit(kind, x, y, w, h, data = {}) {
+    state.hits.push({ kind, x, y, w, h, ...data });
   }
 
   function text(value, x, y, size, align = "left", color = INK) {
@@ -1828,51 +1454,158 @@
     ctx.font = `900 ${size}px "Courier New", monospace`;
     ctx.textAlign = align;
     ctx.textBaseline = "middle";
-    ctx.fillText(value, Math.round(x), Math.round(y));
+    ctx.fillText(String(value), Math.round(x), Math.round(y));
+  }
+
+  function exportCode(design) {
+    const clean = normalizeDesign(design);
+    const json = JSON.stringify(clean);
+    const bytes = new TextEncoder().encode(json);
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return PREFIX + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function importCode(code) {
+    const trimmed = String(code || "").trim();
+    if (!trimmed.startsWith(PREFIX)) throw new Error("BAD PREFIX");
+    let b64 = trimmed.slice(PREFIX.length).replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    const raw = JSON.parse(new TextDecoder().decode(bytes));
+    if (raw.version !== 1) throw new Error("BAD VERSION");
+    return validateImportedDesign(raw);
+  }
+
+  function validateImportedDesign(raw) {
+    if (!raw || typeof raw !== "object") throw new Error("BAD JSON");
+    if (!Array.isArray(raw.blocks) || raw.blocks.length > MAX_BLOCKS) throw new Error("BAD BLOCKS");
+    if (!raw.schematic || !Array.isArray(raw.schematic.logicNodes) || !Array.isArray(raw.schematic.wires)) throw new Error("BAD SCHEMATIC");
+    if (raw.schematic.logicNodes.length > MAX_LOGIC || raw.schematic.wires.length > MAX_WIRES) throw new Error("TOO MANY NODES");
+    return normalizeDesign(raw);
+  }
+
+  function makeShareLayer() {
+    const layer = document.createElement("div");
+    layer.id = "share-ui";
+    layer.innerHTML = `
+      <label>EXPORT</label>
+      <textarea id="export-code" readonly spellcheck="false"></textarea>
+      <button id="copy-code" type="button">COPY</button>
+      <label>IMPORT</label>
+      <textarea id="import-code" spellcheck="false" placeholder="CBA1:..."></textarea>
+      <button id="import-code-btn" type="button">IMPORT AS OPPONENT</button>
+      <div id="share-message"></div>
+    `;
+    document.body.appendChild(layer);
+    layer.querySelector("#copy-code").addEventListener("click", async () => {
+      const value = layer.querySelector("#export-code").value;
+      try {
+        await navigator.clipboard.writeText(value);
+        shareMessage("COPIED");
+      } catch {
+        layer.querySelector("#export-code").select();
+        shareMessage("SELECTED");
+      }
+    });
+    layer.querySelector("#import-code-btn").addEventListener("click", () => {
+      try {
+        const design = importCode(layer.querySelector("#import-code").value);
+        saveOpponent(design);
+        state.fightOpponent = state.opponent;
+        shareMessage("IMPORTED");
+      } catch (error) {
+        shareMessage("INVALID CODE");
+      }
+    });
+    return layer;
+  }
+
+  function positionShareLayer() {
+    const rect = canvas.getBoundingClientRect();
+    shareLayer.style.left = `${rect.left + rect.width / 2}px`;
+    shareLayer.style.top = `${rect.top + 104}px`;
+    shareLayer.style.width = `${Math.min(rect.width - 30, 520)}px`;
+  }
+
+  function syncShareLayer() {
+    if (state.mode !== "share") {
+      shareLayer.style.display = "none";
+      return;
+    }
+    shareLayer.style.display = "block";
+    const out = shareLayer.querySelector("#export-code");
+    if (document.activeElement !== out) out.value = state.exportText;
+    positionShareLayer();
+  }
+
+  function shareMessage(value) {
+    const el = shareLayer.querySelector("#share-message");
+    el.textContent = value;
+    setTimeout(() => {
+      if (el.textContent === value) el.textContent = "";
+    }, 1600);
+  }
+
+  function toast(value) {
+    state.toast = value;
+    state.toastT = 0.9;
   }
 
   function frame(now) {
     if (!frame.last) frame.last = now;
-    const dt = Math.min(0.04, (now - frame.last) / 1000);
+    const dt = Math.min(0.05, (now - frame.last) / 1000);
     frame.last = now;
     if (state.toastT > 0) state.toastT -= dt;
-    if (state.mode === "fight") updateBattle(dt);
+    if (state.mode === "fight") updateFight(dt);
     draw();
-    window.EggCoreDebug = {
-      mode: state.mode,
-      parts: partCount(),
-      enemy: state.enemies[state.enemyIndex]?.name,
-      result: state.battle?.result || state.battle?.pending || "",
-      hp: state.battle ? [coreHp(state.battle.player), coreHp(state.battle.enemy)] : null,
-      phase: state.battle?.phase || "",
-      eventCounts: state.battle ? { ...state.battle.eventCounts } : {},
-      hits: state.hits.length,
-    };
-    canvas.dataset.mode = state.mode;
-    canvas.dataset.result = state.battle?.result || state.battle?.pending || "";
-    canvas.dataset.hp = state.battle ? `${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))}` : "";
-    canvas.dataset.phase = state.battle?.phase || "";
-    canvas.dataset.events = state.battle ? JSON.stringify(state.battle.eventCounts) : "";
-    canvas.dataset.gap = state.battle
-      ? String(Math.round(frontBounds(state.battle.enemy, state.battle.cell).front - frontBounds(state.battle.player, state.battle.cell).front))
-      : "";
-    canvas.dataset.fight = state.battle
-      ? `${state.battle.t.toFixed(1)},${Math.round(state.battle.player.x)},${Math.round(state.battle.enemy.x)},${state.battle.player.parts.filter((p) => p.alive).length},${state.battle.enemy.parts.filter((p) => p.alive).length}`
-      : "";
-    canvas.dataset.hits = String(state.hits.length);
     requestAnimationFrame(frame);
   }
 
-  canvas.addEventListener("pointermove", onPointerMove, { passive: false });
-  canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
-  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-  window.addEventListener("resize", resize);
-  window.addEventListener("keydown", (event) => {
-    if (event.key.toLowerCase() === "r") rotateSelected();
-    if (event.key === "Backspace" || event.key === "Delete") deleteSelected();
-  });
-
-  resize();
-  saveBuild();
   requestAnimationFrame(frame);
+
+  function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  }
+
+  function rand01(n) {
+    const x = Math.sin(n * 999.13) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function normAngle(a) {
+    while (a <= -Math.PI) a += Math.PI * 2;
+    while (a > Math.PI) a -= Math.PI * 2;
+    return a;
+  }
+
+  function angleDiff(a, b) {
+    return normAngle(a - b);
+  }
+
+  function approachAngle(current, target, step) {
+    const d = angleDiff(target, current);
+    if (Math.abs(d) <= step) return target;
+    return normAngle(current + Math.sign(d) * step);
+  }
+
+  function hashString(value) {
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i += 1) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function mulberry32(seed) {
+    let t = seed >>> 0;
+    return () => {
+      t += 0x6d2b79f5;
+      let r = Math.imul(t ^ (t >>> 15), 1 | t);
+      r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 })();

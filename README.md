@@ -1,6 +1,6 @@
-# Egg Core Bot Battle
+# Circuit Bot Arena
 
-White-and-black pixel toy bot battler.
+Minimal Robocode-style Canvas prototype.
 
 ## Run
 
@@ -11,10 +11,9 @@ npm run dev
 
 ## Play
 
-- Pick a part from the tray.
-- Tap a glowing socket to attach it to the egg bot.
-- Tap a part, then rotate or delete it.
-- Press FIGHT to watch part events resolve the battle.
-- Use RETRY / GARAGE / NEXT after the result.
+- BUILD: place Wheel / Gun / Radar / Armor / Battery blocks around the fixed Core.
+- WIRE: connect Sensor, Logic, and Action nodes in one global schematic.
+- FIGHT: watch bots scan, aim, fire bullets, damage blocks, and break Cores.
+- SHARE: export a `CBA1:` bot code or import a rival code as the opponent.
 
-The game is Canvas-only, uses no image assets, and stores builds locally.
+No server, no external image assets, no user-written code.
