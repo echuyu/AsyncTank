@@ -3,64 +3,56 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AsyncFortress 3D Clash</title>
-    <link rel="stylesheet" href="style.css?v=20260704-fortress1">
+    <title>Egg Core Bot Battle</title>
+    <link rel="stylesheet" href="style.css?v=20260704-eggcore3">
   </head>
   <body>
-    <main class="game-shell">
-      <section id="scene" class="scene" aria-label="3D fortress battle scene"></section>
-
-      <header class="hud">
-        <div class="brand">
-          <p>ASYNC FORTRESS</p>
-          <h1>3D Clash</h1>
-        </div>
-        <div class="meters" aria-label="fortress core meters">
-          <div class="meter blue"><span id="playerCore"></span></div>
-          <strong id="clock">0.0</strong>
-          <div class="meter red"><span id="rivalCore"></span></div>
-        </div>
-        <div class="actions">
-          <button id="fightBtn" type="button">FIGHT</button>
-          <button id="resetBtn" type="button">RESET</button>
-        </div>
+    <main class="shell">
+      <header class="topbar">
+        <h1>Egg Core Bot Battle</h1>
+        <span id="modeBadge">BUILD</span>
       </header>
 
-      <aside class="builder">
-        <div class="builder-top">
-          <div>
-            <p class="label">FORTRESS</p>
-            <h2 id="fortressName">Frontline Box</h2>
+      <section class="stage">
+        <canvas id="game" width="480" height="320" aria-label="Egg Core Bot Battle canvas"></canvas>
+
+        <aside class="panel" aria-label="controls">
+          <div class="tabs">
+            <button id="buildTab" type="button">BUILD</button>
+            <button id="battleTab" type="button">BATTLE</button>
           </div>
-          <div class="status-pill" id="battleState">READY</div>
-        </div>
 
-        <div class="result-line" id="resultLine">CORE 0 / 0</div>
+          <div id="tray" class="tray" aria-label="part tray"></div>
 
-        <div class="selection-readout" id="selectionReadout" aria-live="polite"></div>
+          <div class="row">
+            <button id="rotateBtn" type="button">R</button>
+            <button id="eraseBtn" type="button">DEL</button>
+            <button id="randomBtn" type="button">RANDOM</button>
+          </div>
 
-        <div class="workbench">
-          <div class="fortress-grid" id="fortressGrid" aria-label="fortress grid"></div>
-          <div class="builder-telemetry" id="builderTelemetry" aria-label="fortress telemetry"></div>
-        </div>
+          <div class="row">
+            <button id="saveBtn" type="button">SAVE</button>
+            <button id="defenseBtn" type="button">DEF</button>
+            <button id="testBtn" type="button">TEST</button>
+          </div>
 
-        <div class="palette" id="palette" aria-label="part palette"></div>
+          <label class="enemy-line">
+            ENEMY
+            <select id="enemySelect"></select>
+          </label>
 
-        <div class="preset-row" id="presets" aria-label="fortress presets"></div>
+          <div class="row battle-row">
+            <button id="replayBtn" type="button">REPLAY</button>
+            <button id="backBuildBtn" type="button">BUILD</button>
+            <button id="nextBtn" type="button">NEXT</button>
+          </div>
 
-        <div class="enemy-row">
-          <label for="rivalSelect">RIVAL</label>
-          <select id="rivalSelect"></select>
-        </div>
-
-        <div class="code-row">
-          <button id="exportBtn" type="button">CODE</button>
-          <button id="importBtn" type="button">LOAD</button>
-        </div>
-        <textarea id="codeBox" spellcheck="false" aria-label="fortress code"></textarea>
-      </aside>
+          <div id="status" class="status">PARTS 0/10</div>
+          <ol id="logList" class="log-list" aria-label="battle log"></ol>
+        </aside>
+      </section>
     </main>
 
-    <script src="app.js?v=20260704-fortress1"></script>
+    <script type="module" src="app.js?v=20260704-eggcore3"></script>
   </body>
 </html>
