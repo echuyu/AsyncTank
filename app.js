@@ -2,160 +2,135 @@
   const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
 
   const TAU = Math.PI * 2;
-  const TRACK_WIDTH = 1.38;
-  const LAPS = 2;
-  const MAX_RACE_TIME = 42;
-  const ROAD_SEGMENTS = 420;
+  const COLS = 5;
+  const ROWS = 4;
+  const CORE_SLOT = "s2_2";
+  const MAX_BATTLE_TIME = 45;
+  const ARENA_LIMIT = 5.45;
+  const CONTACT_DISTANCE = 1.05;
 
-  const slotDefs = [
-    { id: "nose", label: "NOSE", x: 50, y: 15, mount: [0, 0.28, 0.8], scale: 1.08 },
-    { id: "left", label: "LEFT", x: 20, y: 45, mount: [-0.48, 0.22, 0.05], scale: 0.94 },
-    { id: "core", label: "CORE", x: 50, y: 45, mount: [0, 0.36, 0.08], scale: 1 },
-    { id: "right", label: "RIGHT", x: 80, y: 45, mount: [0.48, 0.22, 0.05], scale: 0.94 },
-    { id: "tail", label: "TAIL", x: 50, y: 76, mount: [0, 0.25, -0.76], scale: 1.08 },
-    { id: "top", label: "TOP", x: 50, y: 31, mount: [0, 0.56, 0.26], scale: 0.86 }
-  ];
+  const slotDefs = [];
+  for (let row = 0; row < ROWS; row += 1) {
+    for (let col = 0; col < COLS; col += 1) {
+      const id = `s${col}_${row}`;
+      slotDefs.push({
+        id,
+        col,
+        row,
+        label: `${String.fromCharCode(65 + col)}${row + 1}`,
+        fixed: id === CORE_SLOT,
+        uiX: 10 + col * 20,
+        uiY: 13 + row * 22,
+        local: new THREE.Vector3(0.52, 1.28 - row * 0.36, (col - 2) * 0.46)
+      });
+    }
+  }
 
   const parts = {
-    empty: { mark: "·", name: "EMPTY", color: "#69737a", role: "core", stats: {} },
-    booster: {
-      mark: "↯",
-      name: "BOOSTER",
-      color: "#ffb84e",
-      role: "speed",
-      stats: { top: 0.42, accel: 0.16, boost: 0.92, grip: -0.12, stability: -0.16, mass: 0.18 }
-    },
-    roller: {
-      mark: "◎",
-      name: "ROLLER",
-      color: "#55d8f0",
-      role: "wall",
-      stats: { wall: 0.88, grip: 0.12, stability: 0.08, top: -0.06, mass: 0.14 }
-    },
-    grip: {
-      mark: "●",
-      name: "GRIP",
-      color: "#7ee081",
-      role: "grip",
-      stats: { grip: 0.78, accel: 0.16, top: -0.1, mass: 0.16 }
-    },
-    weight: {
-      mark: "◆",
-      name: "WEIGHT",
-      color: "#9b8cff",
-      role: "stability",
-      stats: { stability: 0.72, wall: 0.2, top: -0.32, accel: -0.12, mass: 0.74 }
-    },
-    wing: {
-      mark: "▱",
-      name: "WING",
-      color: "#f4df62",
-      role: "air",
-      stats: { air: 0.95, stability: 0.2, grip: 0.08, top: -0.06, mass: 0.1 }
-    },
-    bumper: {
-      mark: "▰",
-      name: "BUMPER",
-      color: "#ff6461",
-      role: "guard",
-      stats: { toughness: 0.76, wall: 0.32, stability: 0.18, top: -0.08, mass: 0.24 }
-    }
+    empty: { mark: "·", name: "EMPTY", color: "#68737a", role: "clear", stats: {} },
+    core: { mark: "◎", name: "CORE", color: "#f4efe6", role: "core", stats: { hp: 130, mass: 1.4 } },
+    cannon: { mark: "●", name: "CANNON", color: "#f4df62", role: "attack", stats: { attack: 1.12, range: 0.72, mass: 0.42 } },
+    missile: { mark: "◆", name: "MISSILE", color: "#ffb84e", role: "attack", stats: { attack: 0.88, range: 1.05, mass: 0.32 } },
+    shield: { mark: "▰", name: "SHIELD", color: "#55d8f0", role: "guard", stats: { defense: 1.18, mass: 0.48 } },
+    ram: { mark: "▲", name: "RAM", color: "#ff6461", role: "push", stats: { push: 1.12, attack: 0.34, mass: 0.36 } },
+    engine: { mark: "↯", name: "ENGINE", color: "#7ee081", role: "move", stats: { speed: 1.12, push: 0.28, mass: 0.28 } },
+    armor: { mark: "■", name: "ARMOR", color: "#9b8cff", role: "guard", stats: { hp: 24, defense: 0.48, mass: 0.62 } }
   };
 
   const paletteGroups = [
-    { label: "RUN", ids: ["booster", "grip"] },
-    { label: "STAY", ids: ["roller", "weight"] },
-    { label: "JUMP", ids: ["wing", "bumper"] },
+    { label: "FIRE", ids: ["cannon", "missile"] },
+    { label: "WALL", ids: ["shield", "armor"] },
+    { label: "MOVE", ids: ["ram", "engine"] },
     { label: "CLEAR", ids: ["empty"] }
   ];
 
   const playerPresets = [
-    makeBuild("Pocket Rocket", {
-      nose: "bumper",
-      left: "roller",
-      core: "grip",
-      right: "roller",
-      tail: "booster",
-      top: "wing"
+    makeFortress("Frontline Box", {
+      s2_0: "cannon",
+      s1_1: "shield",
+      s3_1: "shield",
+      s0_2: "engine",
+      s4_2: "engine",
+      s1_3: "ram",
+      s3_3: "ram"
     }),
-    makeBuild("Boost Needle", {
-      nose: "booster",
-      left: "grip",
-      core: "booster",
-      right: "grip",
-      tail: "booster",
-      top: "wing"
+    makeFortress("Cannon Wall", {
+      s1_0: "cannon",
+      s2_0: "cannon",
+      s3_0: "cannon",
+      s0_1: "shield",
+      s4_1: "shield",
+      s1_2: "armor",
+      s3_2: "armor",
+      s2_3: "engine"
     }),
-    makeBuild("Wall Rider", {
-      nose: "bumper",
-      left: "roller",
-      core: "weight",
-      right: "roller",
-      tail: "booster",
-      top: "grip"
+    makeFortress("Rocket Rain", {
+      s0_0: "missile",
+      s2_0: "missile",
+      s4_0: "missile",
+      s1_1: "cannon",
+      s3_1: "cannon",
+      s0_3: "engine",
+      s4_3: "engine"
     }),
-    makeBuild("Low Heavy", {
-      nose: "bumper",
-      left: "weight",
-      core: "weight",
-      right: "weight",
-      tail: "booster",
-      top: "roller"
+    makeFortress("Ram Runner", {
+      s1_0: "ram",
+      s2_0: "ram",
+      s3_0: "ram",
+      s0_1: "shield",
+      s4_1: "shield",
+      s1_3: "engine",
+      s2_3: "engine",
+      s3_3: "engine"
     })
   ];
 
   const rivalPresets = [
-    makeBuild("Red Comet", {
-      nose: "booster",
-      left: "grip",
-      core: "booster",
-      right: "grip",
-      tail: "booster",
-      top: "wing"
+    makeFortress("Red Bastion", {
+      s2_0: "cannon",
+      s0_1: "shield",
+      s4_1: "shield",
+      s1_2: "armor",
+      s3_2: "armor",
+      s2_3: "engine"
     }),
-    makeBuild("Corner King", {
-      nose: "bumper",
-      left: "roller",
-      core: "grip",
-      right: "roller",
-      tail: "booster",
-      top: "weight"
+    makeFortress("Spear Gate", {
+      s0_0: "ram",
+      s2_0: "ram",
+      s4_0: "ram",
+      s1_1: "shield",
+      s3_1: "shield",
+      s0_3: "engine",
+      s4_3: "engine"
     }),
-    makeBuild("Stone Wall", {
-      nose: "bumper",
-      left: "weight",
-      core: "weight",
-      right: "weight",
-      tail: "roller",
-      top: "grip"
+    makeFortress("Missile Keep", {
+      s1_0: "missile",
+      s3_0: "missile",
+      s2_1: "cannon",
+      s0_2: "shield",
+      s4_2: "shield",
+      s1_3: "engine",
+      s3_3: "engine"
     })
-  ];
-
-  const featureZones = [
-    { type: "boost", start: 0.02, end: 0.11, color: 0x55d8f0 },
-    { type: "jump", start: 0.25, end: 0.32, color: 0xf4df62 },
-    { type: "rough", start: 0.52, end: 0.64, color: 0x9b8cff },
-    { type: "boost", start: 0.75, end: 0.84, color: 0xffb84e },
-    { type: "wall", start: 0.88, end: 0.97, color: 0xff6461 }
   ];
 
   const els = {
     scene: document.querySelector("#scene"),
-    garageMap: document.querySelector("#garageMap"),
+    fortressGrid: document.querySelector("#fortressGrid"),
     selectionReadout: document.querySelector("#selectionReadout"),
     builderTelemetry: document.querySelector("#builderTelemetry"),
     palette: document.querySelector("#palette"),
     presets: document.querySelector("#presets"),
     rivalSelect: document.querySelector("#rivalSelect"),
-    raceBtn: document.querySelector("#raceBtn"),
+    fightBtn: document.querySelector("#fightBtn"),
     resetBtn: document.querySelector("#resetBtn"),
     exportBtn: document.querySelector("#exportBtn"),
     importBtn: document.querySelector("#importBtn"),
     codeBox: document.querySelector("#codeBox"),
-    machineName: document.querySelector("#machineName"),
-    raceState: document.querySelector("#raceState"),
-    playerMeter: document.querySelector("#playerMeter"),
-    rivalMeter: document.querySelector("#rivalMeter"),
+    fortressName: document.querySelector("#fortressName"),
+    battleState: document.querySelector("#battleState"),
+    playerCore: document.querySelector("#playerCore"),
+    rivalCore: document.querySelector("#rivalCore"),
     clock: document.querySelector("#clock"),
     resultLine: document.querySelector("#resultLine")
   };
@@ -163,15 +138,15 @@
   let playerBuild = clone(playerPresets[0]);
   let importedRival = null;
   let rivalBuild = clone(rivalPresets[0]);
-  let selectedSlot = "tail";
-  let playerMachine = null;
-  let rivalMachine = null;
-  let particles = [];
+  let selectedSlot = "s2_0";
+  let playerFort = null;
+  let rivalFort = null;
+  let projectiles = [];
+  let effects = [];
   let running = false;
-  let raceTime = 0;
+  let battleTime = 0;
   let lastTick = performance.now();
   let cameraShake = 0;
-  let dragState = null;
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -180,16 +155,16 @@
   els.scene.append(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x101417, 10, 26);
+  scene.fog = new THREE.Fog(0x101417, 11, 24);
 
   const camera = new THREE.PerspectiveCamera(44, 1, 0.1, 80);
-  const target = new THREE.Vector3(0, 0, 0);
+  const target = new THREE.Vector3(0, 0.75, 0);
 
-  const hemi = new THREE.HemisphereLight(0xe9fbff, 0x171c1e, 2.6);
+  const hemi = new THREE.HemisphereLight(0xe8fbff, 0x15191b, 2.5);
   scene.add(hemi);
 
-  const key = new THREE.DirectionalLight(0xffffff, 3.2);
-  key.position.set(-4, 9, 5);
+  const key = new THREE.DirectionalLight(0xffffff, 3.1);
+  key.position.set(-4, 8, 5);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.near = 1;
@@ -200,115 +175,117 @@
   key.shadow.camera.bottom = -10;
   scene.add(key);
 
-  const track = createTrack();
-  scene.add(track.group);
+  const arena = createArena();
+  scene.add(arena);
 
   initUi();
-  resetRace();
+  resetBattle();
   resize();
   window.addEventListener("resize", resize);
   requestAnimationFrame(loop);
 
-  function makeBuild(name, slotMap) {
+  function makeFortress(name, slotMap) {
     const slots = {};
     slotDefs.forEach((slot) => {
-      slots[slot.id] = slotMap[slot.id] || "empty";
+      slots[slot.id] = slot.fixed ? "core" : slotMap[slot.id] || "empty";
     });
     return { version: 1, name, slots };
   }
 
   function initUi() {
-    renderGarage();
+    renderGrid();
     renderPalette();
     renderPresets();
     renderRivals();
 
-    els.garageMap.addEventListener("click", (event) => {
+    els.fortressGrid.addEventListener("click", (event) => {
       const button = event.target.closest("[data-slot]");
       if (!button) return;
       selectedSlot = button.dataset.slot;
-      renderGarage();
+      renderGrid();
+    });
+
+    els.palette.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-part]");
+      if (!button) return;
+      attachPart(selectedSlot, button.dataset.part);
     });
 
     els.palette.addEventListener("pointerdown", (event) => {
       const button = event.target.closest("[data-part]");
       if (!button) return;
-      beginPartDrag(button.dataset.part, event);
+      button.setPointerCapture?.(event.pointerId);
     });
 
     els.presets.addEventListener("click", (event) => {
       const button = event.target.closest("[data-preset]");
       if (!button) return;
       playerBuild = clone(playerPresets[Number(button.dataset.preset)]);
-      selectedSlot = "tail";
+      selectedSlot = "s2_0";
       syncBuildUi();
-      resetRace();
+      resetBattle();
     });
 
     els.rivalSelect.addEventListener("change", () => {
       const value = els.rivalSelect.value;
       rivalBuild = value === "imported" && importedRival ? clone(importedRival) : clone(rivalPresets[Number(value) || 0]);
-      resetRace();
+      resetBattle();
     });
 
-    els.raceBtn.addEventListener("click", () => {
-      resetRace();
+    els.fightBtn.addEventListener("click", () => {
+      resetBattle();
       running = true;
-      els.raceState.textContent = "RACING";
+      els.battleState.textContent = "FIGHT";
     });
 
-    els.resetBtn.addEventListener("click", resetRace);
+    els.resetBtn.addEventListener("click", resetBattle);
 
     els.exportBtn.addEventListener("click", () => {
-      els.codeBox.value = encodeBuild(playerBuild);
+      els.codeBox.value = encodeFortress(playerBuild);
       navigator.clipboard?.writeText(els.codeBox.value);
     });
 
     els.importBtn.addEventListener("click", () => {
       try {
-        importedRival = decodeBuild(els.codeBox.value);
+        importedRival = decodeFortress(els.codeBox.value);
         rivalBuild = clone(importedRival);
         renderRivals();
         els.rivalSelect.value = "imported";
-        resetRace();
+        resetBattle();
       } catch (error) {
-        els.raceState.textContent = "BAD CODE";
+        els.battleState.textContent = "BAD CODE";
       }
     });
 
-    els.codeBox.value = encodeBuild(playerBuild);
+    els.codeBox.value = encodeFortress(playerBuild);
   }
 
   function syncBuildUi() {
-    els.codeBox.value = encodeBuild(playerBuild);
-    renderGarage();
+    els.codeBox.value = encodeFortress(playerBuild);
+    renderGrid();
     renderPresets();
   }
 
-  function renderGarage() {
+  function renderGrid() {
     const stats = calcStats(playerBuild);
-    els.machineName.textContent = playerBuild.name;
-    els.garageMap.innerHTML = `
-      <div class="garage-grid"></div>
-      <div class="machine-shadow"></div>
-      <div class="machine-shell"><span></span></div>
-    `;
+    els.fortressName.textContent = playerBuild.name;
+    els.fortressGrid.innerHTML = "";
 
     slotDefs.forEach((slot) => {
       const partId = playerBuild.slots[slot.id] || "empty";
       const part = parts[partId];
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""}`;
+      button.className = `grid-slot ${slot.id === selectedSlot ? "active" : ""} ${slot.fixed ? "fixed" : ""} ${partId === "empty" ? "empty" : ""}`;
       button.dataset.slot = slot.id;
       button.dataset.part = partId;
       button.dataset.role = part.role;
       button.title = `${slot.label} ${part.name}`;
-      button.style.left = `${slot.x}%`;
-      button.style.top = `${slot.y}%`;
+      button.style.gridColumn = `${slot.col + 1}`;
+      button.style.gridRow = `${slot.row + 1}`;
       button.style.color = part.color;
       button.textContent = part.mark;
-      els.garageMap.append(button);
+      els.fortressGrid.append(button);
     });
 
     renderSelectionReadout(stats);
@@ -329,13 +306,13 @@
 
     const text = document.createElement("div");
     const label = document.createElement("span");
-    label.textContent = slot.label;
+    label.textContent = `${slot.label}${slot.fixed ? " LOCK" : ""}`;
     const name = document.createElement("strong");
     name.textContent = part.name;
     text.append(label, name);
 
     const rating = document.createElement("span");
-    rating.className = "balance-chip";
+    rating.className = "rating-chip";
     rating.textContent = `${Math.round(stats.rating)}`;
 
     els.selectionReadout.append(mark, text, rating);
@@ -344,12 +321,12 @@
   function renderTelemetry(stats) {
     els.builderTelemetry.innerHTML = "";
     [
-      { mark: "↯", label: "SPD", value: stats.bars.speed, color: "#ffb84e" },
-      { mark: "●", label: "GRP", value: stats.bars.grip, color: "#7ee081" },
-      { mark: "◆", label: "STB", value: stats.bars.stability, color: "#9b8cff" },
-      { mark: "◎", label: "WALL", value: stats.bars.wall, color: "#55d8f0" },
-      { mark: "▱", label: "AIR", value: stats.bars.air, color: "#f4df62" },
-      { mark: "▰", label: "SAFE", value: stats.bars.toughness, color: "#ff6461" }
+      { mark: "●", label: "ATK", value: stats.bars.attack, color: "#f4df62" },
+      { mark: "▰", label: "DEF", value: stats.bars.defense, color: "#55d8f0" },
+      { mark: "▲", label: "PUSH", value: stats.bars.push, color: "#ff6461" },
+      { mark: "↯", label: "SPD", value: stats.bars.speed, color: "#7ee081" },
+      { mark: "◆", label: "RNG", value: stats.bars.range, color: "#ffb84e" },
+      { mark: "◎", label: "CORE", value: stats.bars.hp, color: "#f4efe6" }
     ].forEach((row) => {
       const item = document.createElement("div");
       item.className = "telemetry-row";
@@ -405,8 +382,10 @@
 
   function updatePaletteState() {
     if (!els.palette) return;
+    const slot = slotDefs.find((item) => item.id === selectedSlot);
     const selectedPart = playerBuild.slots[selectedSlot] || "empty";
     els.palette.querySelectorAll("[data-part]").forEach((button) => {
+      button.disabled = Boolean(slot?.fixed);
       button.classList.toggle("active", button.dataset.part === selectedPart);
     });
   }
@@ -439,421 +418,284 @@
     }
   }
 
-  function beginPartDrag(partId, event) {
-    event.preventDefault();
-    const chip = document.createElement("div");
-    chip.className = "drag-chip";
-    chip.style.color = parts[partId].color;
-    chip.textContent = parts[partId].mark;
-    document.body.append(chip);
-    dragState = {
-      partId,
-      chip,
-      startX: event.clientX,
-      startY: event.clientY,
-      pointerId: event.pointerId
-    };
-    moveDragChip(event.clientX, event.clientY);
-    document.addEventListener("pointermove", movePartDrag);
-    document.addEventListener("pointerup", endPartDrag, { once: true });
-  }
-
-  function movePartDrag(event) {
-    if (!dragState) return;
-    moveDragChip(event.clientX, event.clientY);
-    const targetSlot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-slot]");
-    els.garageMap.querySelectorAll("[data-slot]").forEach((node) => {
-      node.classList.toggle("drop-target", node === targetSlot);
-    });
-  }
-
-  function endPartDrag(event) {
-    if (!dragState) return;
-    const distance = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
-    const targetSlot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-slot]");
-    attachPart(targetSlot?.dataset.slot || (distance < 10 ? selectedSlot : null), dragState.partId);
-    dragState.chip.remove();
-    dragState = null;
-    document.removeEventListener("pointermove", movePartDrag);
-    els.garageMap.querySelectorAll("[data-slot]").forEach((node) => node.classList.remove("drop-target"));
-  }
-
-  function moveDragChip(x, y) {
-    if (!dragState) return;
-    dragState.chip.style.left = `${x}px`;
-    dragState.chip.style.top = `${y}px`;
-  }
-
   function attachPart(slotId, partId) {
-    if (!slotId || !parts[partId]) return;
+    const slot = slotDefs.find((item) => item.id === slotId);
+    if (!slot || slot.fixed || !parts[partId] || partId === "core") return;
     playerBuild.slots[slotId] = partId;
-    playerBuild.name = "Custom Mini";
+    playerBuild.name = "Custom Fortress";
     selectedSlot = slotId;
     syncBuildUi();
-    resetRace();
+    resetBattle();
   }
 
   function calcStats(build) {
     const raw = {
-      top: 4.18,
-      accel: 2.24,
-      grip: 1,
-      stability: 0.92,
-      wall: 0.16,
-      air: 0.48,
-      boost: 0,
-      toughness: 0.24,
-      mass: 1
+      hp: 130,
+      attack: 0,
+      defense: 0.35,
+      push: 0.35,
+      speed: 0.35,
+      range: 0,
+      mass: 4.6
     };
-
     slotDefs.forEach((slot) => {
-      const partId = build.slots[slot.id] || "empty";
-      const part = parts[partId] || parts.empty;
-      const mul = slotMultiplier(partId, slot.id);
+      const part = parts[build.slots[slot.id] || "empty"] || parts.empty;
+      const mul = slotMultiplier(part.role, slot);
       Object.entries(part.stats).forEach(([key, value]) => {
         raw[key] += value * mul;
       });
     });
 
-    const topSpeed = clamp(3.05, 7.55, raw.top - Math.max(0, raw.mass - 1) * 0.16);
-    const accel = clamp(1.05, 4.2, raw.accel - Math.max(0, raw.mass - 1) * 0.2);
-    const grip = clamp(0.55, 2.85, raw.grip);
-    const stability = clamp(0.48, 2.8, raw.stability);
-    const wall = clamp(0.08, 2.55, raw.wall);
-    const air = clamp(0.18, 2.45, raw.air);
-    const boost = clamp(0, 3.3, raw.boost);
-    const toughness = clamp(0.15, 2.4, raw.toughness);
-    const mass = clamp(0.8, 4.5, raw.mass);
-    const rating = 48 + topSpeed * 5.5 + grip * 8 + stability * 6 + wall * 5 + air * 4 + boost * 5 - mass * 2.8;
+    const mass = clamp(3.6, 13.0, raw.mass);
+    const hp = clamp(90, 250, raw.hp + raw.defense * 10);
+    const attack = clamp(0, 8, raw.attack);
+    const defense = clamp(0.2, 7, raw.defense);
+    const push = clamp(0.2, 8, raw.push + raw.speed * 0.25);
+    const speed = clamp(0.15, 4.2, raw.speed - Math.max(0, mass - 6.2) * 0.08);
+    const range = clamp(0, 7, raw.range + raw.attack * 0.16);
+    const rating = clamp(0, 99, 34 + attack * 7 + defense * 7 + push * 5.6 + speed * 6 + range * 3 + hp * 0.08 - mass * 1.2);
 
     return {
-      topSpeed,
-      accel,
-      grip,
-      stability,
-      wall,
-      air,
-      boost,
-      toughness,
+      hp,
+      attack,
+      defense,
+      push,
+      speed,
+      range,
       mass,
-      rating: clamp(0, 99, rating),
+      rating,
       bars: {
-        speed: normalize(topSpeed, 3.05, 7.55),
-        grip: normalize(grip, 0.55, 2.85),
-        stability: normalize(stability, 0.48, 2.8),
-        wall: normalize(wall, 0.08, 2.55),
-        air: normalize(air, 0.18, 2.45),
-        toughness: normalize(toughness, 0.15, 2.4)
+        hp: normalize(hp, 90, 250),
+        attack: normalize(attack, 0, 8),
+        defense: normalize(defense, 0.2, 7),
+        push: normalize(push, 0.2, 8),
+        speed: normalize(speed, 0.15, 4.2),
+        range: normalize(range, 0, 7)
       }
     };
   }
 
-  function slotMultiplier(partId, slotId) {
-    if (partId === "booster" && slotId === "tail") return 1.35;
-    if (partId === "booster" && slotId === "nose") return 0.75;
-    if (partId === "roller" && (slotId === "left" || slotId === "right")) return 1.28;
-    if (partId === "grip" && (slotId === "left" || slotId === "right" || slotId === "core")) return 1.16;
-    if (partId === "weight" && slotId === "core") return 1.26;
-    if (partId === "wing" && slotId === "top") return 1.36;
-    if (partId === "bumper" && slotId === "nose") return 1.34;
+  function slotMultiplier(role, slot) {
+    if (role === "attack" && slot.row === 0) return 1.22;
+    if (role === "guard" && (slot.col === 0 || slot.col === COLS - 1 || slot.row <= 1)) return 1.16;
+    if (role === "push" && slot.row === 0) return 1.34;
+    if (role === "move" && slot.row >= 2) return 1.24;
     return 1;
   }
 
-  function createTrack() {
-    const points = [
-      new THREE.Vector3(-4.6, 0, -2.4),
-      new THREE.Vector3(2.8, 0, -2.45),
-      new THREE.Vector3(5.3, 0, -0.6),
-      new THREE.Vector3(4.2, 0, 2.05),
-      new THREE.Vector3(0.8, 0, 2.62),
-      new THREE.Vector3(-2.4, 0, 1.45),
-      new THREE.Vector3(-5.1, 0, 2.1),
-      new THREE.Vector3(-6.2, 0, -0.2)
-    ];
-    const curve = new THREE.CatmullRomCurve3(points, true, "centripetal", 0.82);
-    const length = curve.getLength();
-    const samples = Array.from({ length: ROAD_SEGMENTS + 1 }, (_, index) => sampleCurve(curve, index / ROAD_SEGMENTS));
-
+  function createArena() {
     const group = new THREE.Group();
-    const road = new THREE.Mesh(
-      makeRibbonGeometry(samples, TRACK_WIDTH, 0.012),
-      new THREE.MeshStandardMaterial({ color: 0x222c2f, roughness: 0.72, metalness: 0.08 })
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(12.2, 0.12, 4.9),
+      new THREE.MeshStandardMaterial({ color: 0x20282b, roughness: 0.78, metalness: 0.08 })
     );
-    road.receiveShadow = true;
-    group.add(road);
+    floor.position.y = -0.08;
+    floor.receiveShadow = true;
+    group.add(floor);
 
-    const innerRail = makeRail(samples, -TRACK_WIDTH * 0.55, 0x47545a);
-    const outerRail = makeRail(samples, TRACK_WIDTH * 0.55, 0xffd36b);
-    group.add(innerRail, outerRail);
+    const center = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.035, 4.72),
+      new THREE.MeshStandardMaterial({ color: 0xffd36b, emissive: 0x4a2a08, roughness: 0.45 })
+    );
+    center.position.y = 0.02;
+    group.add(center);
 
-    featureZones.forEach((zone) => {
-      const strip = new THREE.Mesh(
-        makeFeatureGeometry(curve, zone.start, zone.end, TRACK_WIDTH * 0.82, 0.026),
-        new THREE.MeshStandardMaterial({
-          color: zone.color,
-          emissive: zone.color,
-          emissiveIntensity: zone.type === "boost" ? 0.22 : 0.08,
-          roughness: 0.52,
-          transparent: true,
-          opacity: zone.type === "wall" ? 0.72 : 0.88
-        })
+    [-ARENA_LIMIT, ARENA_LIMIT].forEach((x, index) => {
+      const line = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.045, 4.72),
+        new THREE.MeshStandardMaterial({ color: index === 0 ? 0x55d8f0 : 0xff6461, emissive: index === 0 ? 0x0f3a44 : 0x401010 })
       );
-      strip.receiveShadow = true;
-      group.add(strip);
+      line.position.set(x, 0.03, 0);
+      group.add(line);
     });
 
-    for (let i = 0; i < 22; i += 1) {
-      const u = i / 22;
-      const sample = sampleCurve(curve, u);
-      const post = new THREE.Mesh(
-        new THREE.BoxGeometry(0.055, 0.42, 0.055),
-        new THREE.MeshStandardMaterial({ color: 0x637078, emissive: 0x101719 })
-      );
-      const side = i % 2 === 0 ? 1 : -1;
-      post.position.copy(sample.point.clone().add(sample.normal.clone().multiplyScalar(side * TRACK_WIDTH * 0.68)));
-      post.position.y = 0.23;
-      post.castShadow = true;
-      group.add(post);
+    for (let i = 0; i < 18; i += 1) {
+      const x = -5.55 + i * 0.65;
+      const postA = makePost(x, -2.22);
+      const postB = makePost(x, 2.22);
+      group.add(postA, postB);
     }
-
-    const startSample = sampleCurve(curve, 0);
-    const startLine = new THREE.Mesh(
-      new THREE.BoxGeometry(TRACK_WIDTH * 0.95, 0.026, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0xf4efe6, emissive: 0x302a18 })
-    );
-    startLine.position.copy(startSample.point.clone().add(startSample.tangent.clone().multiplyScalar(0.06)));
-    startLine.position.y = 0.045;
-    startLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), startSample.tangent);
-    group.add(startLine);
 
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(18, 13),
-      new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.85, metalness: 0.02 })
+      new THREE.PlaneGeometry(18, 11),
+      new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.92 })
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.025;
+    ground.position.y = -0.15;
     ground.receiveShadow = true;
     group.add(ground);
-
-    return { curve, group, length, samples };
+    return group;
   }
 
-  function sampleCurve(curve, u) {
-    const point = curve.getPointAt(wrap01(u));
-    const tangent = curve.getTangentAt(wrap01(u)).normalize();
-    const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-    const prev = curve.getTangentAt(wrap01(u - 0.003)).normalize();
-    const next = curve.getTangentAt(wrap01(u + 0.003)).normalize();
-    const cross = prev.x * next.z - prev.z * next.x;
-    const angle = Math.acos(clamp(-1, 1, prev.dot(next)));
-    return {
-      u: wrap01(u),
-      point,
-      tangent,
-      normal,
-      curvature: angle / 0.006,
-      curveSign: Math.sign(cross) || 1,
-      feature: featureAt(wrap01(u))
-    };
-  }
-
-  function sampleTrack(progress) {
-    return sampleCurve(track.curve, (progress % track.length) / track.length);
-  }
-
-  function featureAt(u) {
-    return featureZones.find((zone) => u >= zone.start && u <= zone.end) || null;
-  }
-
-  function featurePhase(u, feature) {
-    if (!feature) return 0;
-    return clamp01((u - feature.start) / Math.max(0.001, feature.end - feature.start));
-  }
-
-  function makeRibbonGeometry(samples, width, y) {
-    const vertices = [];
-    const indices = [];
-    samples.forEach((sample) => {
-      const left = sample.point.clone().add(sample.normal.clone().multiplyScalar(-width / 2));
-      const right = sample.point.clone().add(sample.normal.clone().multiplyScalar(width / 2));
-      vertices.push(left.x, y, left.z, right.x, y, right.z);
-    });
-    for (let i = 0; i < samples.length - 1; i += 1) {
-      const a = i * 2;
-      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-    return geometry;
-  }
-
-  function makeFeatureGeometry(curve, start, end, width, y) {
-    const steps = 34;
-    const samples = Array.from({ length: steps + 1 }, (_, index) => sampleCurve(curve, start + ((end - start) * index) / steps));
-    return makeRibbonGeometry(samples, width, y);
-  }
-
-  function makeRail(samples, offset, color) {
-    const points = samples.map((sample) => sample.point.clone().add(sample.normal.clone().multiplyScalar(offset)).setY(0.08));
-    const curve = new THREE.CatmullRomCurve3(points, true, "centripetal", 0.7);
-    return new THREE.Mesh(
-      new THREE.TubeGeometry(curve, ROAD_SEGMENTS, 0.035, 8, true),
-      new THREE.MeshStandardMaterial({ color, emissive: color === 0xffd36b ? 0x4a2a08 : 0x101719, roughness: 0.42 })
+  function makePost(x, z) {
+    const post = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.42, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x657078, emissive: 0x101719 })
     );
+    post.position.set(x, 0.17, z);
+    post.castShadow = true;
+    return post;
   }
 
-  function resetRace() {
+  function resetBattle() {
     running = false;
-    raceTime = 0;
+    battleTime = 0;
     cameraShake = 0;
-    clearParticles();
-    if (playerMachine) scene.remove(playerMachine.group);
-    if (rivalMachine) scene.remove(rivalMachine.group);
-    playerMachine = createMachine(playerBuild, 0, -0.32);
-    rivalMachine = createMachine(rivalBuild, 1, 0.32);
-    scene.add(playerMachine.group, rivalMachine.group);
-    syncMachineMesh(playerMachine, 0);
-    syncMachineMesh(rivalMachine, 0);
+    clearProjectiles();
+    clearEffects();
+    if (playerFort) scene.remove(playerFort.group);
+    if (rivalFort) scene.remove(rivalFort.group);
+    playerFort = createFortress(playerBuild, 0);
+    rivalFort = createFortress(rivalBuild, 1);
+    scene.add(playerFort.group, rivalFort.group);
+    syncFortressMesh(playerFort, 0);
+    syncFortressMesh(rivalFort, 0);
     updateHud();
-    els.raceState.textContent = "READY";
+    els.battleState.textContent = "READY";
   }
 
-  function createMachine(build, team, lane) {
+  function createFortress(build, team) {
     const stats = calcStats(build);
-    const group = buildMachineMesh(build, team);
-    return {
+    const group = buildFortressMesh(build, team);
+    const fort = {
       team,
       build: clone(build),
       stats,
       group,
-      flames: [],
-      state: {
-        lane,
-        progress: 0,
-        speed: 0,
-        time: 0,
-        finished: false,
-        finishTime: null,
-        outCount: 0,
-        crash: 0,
-        boostTimer: 0,
-        boostCooldown: team === 0 ? 0.15 : 0.35,
-        airHeight: 0
-      }
+      x: team === 0 ? -3.8 : 3.8,
+      vel: team === 0 ? 0.2 : -0.2,
+      coreHp: stats.hp,
+      cooldowns: {},
+      active: new Set(),
+      hitFlash: 0,
+      out: false
     };
+    return fort;
   }
 
-  function buildMachineMesh(build, team) {
+  function buildFortressMesh(build, team) {
     const group = new THREE.Group();
+    group.rotation.y = team === 0 ? 0 : Math.PI;
     const baseColor = team === 0 ? 0x55d8f0 : 0xff6461;
-    const bodyMaterial = new THREE.MeshStandardMaterial({
+    const baseMat = new THREE.MeshStandardMaterial({
       color: baseColor,
-      roughness: 0.42,
-      metalness: 0.22,
-      emissive: team === 0 ? 0x0a3540 : 0x401010
+      roughness: 0.46,
+      metalness: 0.18,
+      emissive: team === 0 ? 0x0b3037 : 0x3c1010
     });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.28, 1.18), bodyMaterial);
-    body.position.y = 0.25;
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
 
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.28), bodyMaterial);
-    nose.position.set(0, 0.27, 0.72);
-    nose.castShadow = true;
-    group.add(nose);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.26, 2.55), baseMat);
+    base.position.set(-0.05, 0.12, 0);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
 
-    const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.6, metalness: 0.08 });
-    [-0.48, 0.48].forEach((x) => {
-      [-0.34, 0.38].forEach((z) => {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.13, 18), wheelMaterial);
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 1.72, 2.55),
+      new THREE.MeshStandardMaterial({ color: 0x192125, roughness: 0.58, metalness: 0.14 })
+    );
+    panel.position.set(0.18, 0.86, 0);
+    panel.castShadow = true;
+    panel.receiveShadow = true;
+    group.add(panel);
+
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.65 });
+    [-0.8, 0.8].forEach((z) => {
+      [-0.18, 0.24].forEach((x) => {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.13, 18), wheelMat);
         wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(x, 0.12, z);
+        wheel.position.set(x, 0.03, z);
         wheel.castShadow = true;
         group.add(wheel);
       });
     });
 
+    group.userData.slotGroups = {};
     slotDefs.forEach((slot) => {
       const partId = build.slots[slot.id] || "empty";
       if (partId === "empty") return;
       const partGroup = createPartMesh(partId, slot);
+      group.userData.slotGroups[slot.id] = partGroup;
       group.add(partGroup);
     });
 
-    group.traverse((child) => {
-      if (child.userData.flame) {
-        child.visible = false;
-        group.userData.flames = group.userData.flames || [];
-        group.userData.flames.push(child);
-      }
-    });
     return group;
   }
 
   function createPartMesh(partId, slot) {
     const part = parts[partId];
     const group = new THREE.Group();
-    const mount = new THREE.Vector3(...slot.mount);
-    group.position.copy(mount);
-    group.scale.setScalar(slot.scale || 1);
-
+    group.position.copy(slot.local);
+    group.userData.partId = partId;
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(part.color),
-      roughness: 0.4,
+      roughness: 0.42,
       metalness: 0.22,
       emissive: new THREE.Color(part.color).multiplyScalar(0.14)
     });
 
-    if (partId === "booster") {
-      const booster = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.4, 18), material);
-      booster.rotation.x = Math.PI / 2;
-      booster.castShadow = true;
-      group.add(booster);
+    if (partId === "core") {
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.19, 22, 16), material);
+      core.castShadow = true;
+      group.add(core);
+    }
 
+    if (partId === "cannon") {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.52, 18), material);
+      barrel.rotation.z = Math.PI / 2;
+      barrel.position.x = 0.16;
+      barrel.castShadow = true;
+      group.add(barrel);
+    }
+
+    if (partId === "missile") {
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.38, 16), material);
+      body.rotation.z = Math.PI / 2;
+      body.position.x = 0.12;
+      body.castShadow = true;
+      group.add(body);
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.18, 16), material);
+      cone.rotation.z = -Math.PI / 2;
+      cone.position.x = 0.38;
+      cone.castShadow = true;
+      group.add(cone);
+    }
+
+    if (partId === "shield") {
+      const shield = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.38), material);
+      shield.position.x = 0.08;
+      shield.castShadow = true;
+      group.add(shield);
+    }
+
+    if (partId === "ram") {
+      const ram = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.5, 20), material);
+      ram.rotation.z = -Math.PI / 2;
+      ram.position.x = 0.2;
+      ram.castShadow = true;
+      group.add(ram);
+    }
+
+    if (partId === "engine") {
+      const engine = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.36, 18), material);
+      engine.rotation.z = Math.PI / 2;
+      engine.position.x = -0.1;
+      engine.castShadow = true;
+      group.add(engine);
       const flame = new THREE.Mesh(
-        new THREE.ConeGeometry(0.12, 0.42, 18),
-        new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.85 })
+        new THREE.ConeGeometry(0.12, 0.36, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.82 })
       );
-      flame.rotation.x = -Math.PI / 2;
-      flame.position.z = -0.34;
+      flame.rotation.z = -Math.PI / 2;
+      flame.position.x = -0.34;
       flame.userData.flame = true;
       group.add(flame);
     }
 
-    if (partId === "roller") {
-      const roller = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.035, 8, 24), material);
-      roller.rotation.y = Math.PI / 2;
-      roller.castShadow = true;
-      group.add(roller);
-    }
-
-    if (partId === "grip") {
-      const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.18, 20), material);
-      tire.rotation.z = Math.PI / 2;
-      tire.castShadow = true;
-      group.add(tire);
-    }
-
-    if (partId === "weight") {
-      const weight = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), material);
-      weight.castShadow = true;
-      group.add(weight);
-    }
-
-    if (partId === "wing") {
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.055, 0.22), material);
-      wing.position.y = 0.08;
-      wing.castShadow = true;
-      group.add(wing);
-    }
-
-    if (partId === "bumper") {
-      const bumper = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.12, 0.14), material);
-      bumper.castShadow = true;
-      group.add(bumper);
+    if (partId === "armor") {
+      const armor = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.24, 0.28), material);
+      armor.castShadow = true;
+      group.add(armor);
     }
 
     return group;
@@ -862,245 +704,345 @@
   function loop(now) {
     const dt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
     lastTick = now;
-    cameraShake = Math.max(0, cameraShake - dt * 2.6);
-
-    if (running) updateRace(dt);
-    syncMachineMesh(playerMachine, dt);
-    syncMachineMesh(rivalMachine, dt);
-    updateParticles(dt);
+    cameraShake = Math.max(0, cameraShake - dt * 2.4);
+    if (running) updateBattle(dt);
+    syncFortressMesh(playerFort, dt);
+    syncFortressMesh(rivalFort, dt);
+    updateProjectiles(dt);
+    updateEffects(dt);
     updateCamera(dt);
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
 
-  function updateRace(dt) {
-    raceTime += dt;
-    updateMachine(playerMachine, dt);
-    updateMachine(rivalMachine, dt);
+  function updateBattle(dt) {
+    battleTime += dt;
+    playerFort.active.clear();
+    rivalFort.active.clear();
+    updateFortress(playerFort, rivalFort, dt);
+    updateFortress(rivalFort, playerFort, dt);
+    handleContact(dt);
     updateHud();
 
-    if ((playerMachine.state.finished && rivalMachine.state.finished) || raceTime >= MAX_RACE_TIME) {
+    const result = battleResult();
+    if (result || battleTime >= MAX_BATTLE_TIME) {
       running = false;
-      const result = compareMachines();
-      els.raceState.textContent = result === 0 ? "DRAW" : result < 0 ? "WIN" : "LOSE";
+      els.battleState.textContent = result || scoreResult();
       updateHud();
     }
   }
 
-  function updateMachine(machine, dt) {
-    const state = machine.state;
-    if (state.finished) return;
-    state.time += dt;
-    state.boostCooldown = Math.max(0, state.boostCooldown - dt);
-    state.boostTimer = Math.max(0, state.boostTimer - dt);
-
-    const sample = sampleTrack(state.progress);
-    const feature = sample.feature;
-    let top = machine.stats.topSpeed;
-
-    if (feature?.type === "rough") {
-      top -= Math.max(0.12, 0.95 - machine.stats.mass * 0.1 - machine.stats.toughness * 0.24);
-      state.speed *= 1 - dt * Math.max(0.04, 0.32 - machine.stats.toughness * 0.08);
-    }
-
-    if (feature?.type === "wall") {
-      top -= Math.max(0, 0.42 - machine.stats.wall * 0.12);
-    }
-
-    if (feature?.type === "boost" && machine.stats.boost > 0.05 && state.boostCooldown <= 0 && state.crash <= 0) {
-      state.boostTimer = 0.72;
-      state.boostCooldown = 2.5;
-      spawnTrackSparks(machine, 0xffb84e, 10);
-    }
-
-    if (state.boostTimer > 0) {
-      top += machine.stats.boost * 0.92;
-      state.speed += machine.stats.boost * 2.05 * dt;
-    }
-
-    if (state.crash > 0) {
-      state.crash = Math.max(0, state.crash - dt);
-      state.speed = Math.max(0.6, state.speed - (2.4 - machine.stats.toughness * 0.35) * dt);
-    } else {
-      state.speed += (top - state.speed) * Math.min(1, dt * machine.stats.accel * 0.38);
-      applyCornering(machine, sample, dt);
-      applyJump(machine, sample, dt);
-    }
-
-    state.progress += Math.max(0, state.speed) * dt;
-    if (state.progress >= track.length * LAPS) {
-      state.finished = true;
-      state.finishTime = state.time;
-      state.speed = 0;
-      spawnTrackSparks(machine, machine.team === 0 ? 0x55d8f0 : 0xff6461, 16);
-    }
-  }
-
-  function applyCornering(machine, sample, dt) {
-    const state = machine.state;
-    const load = state.speed * state.speed * Math.abs(sample.curvature) * 0.062;
-    const hold = machine.stats.grip * 0.58 + machine.stats.stability * 0.34 + machine.stats.wall * 0.12;
-    const slide = Math.max(0, load - hold);
-    state.lane += sample.curveSign * slide * dt * (0.42 + state.speed * 0.055);
-    state.lane *= Math.max(0.1, 1 - dt * (1.15 + machine.stats.grip * 0.62 + machine.stats.wall * 0.7));
-
-    if (Math.abs(state.lane) > TRACK_WIDTH * 0.52) {
-      courseOut(machine, sample, 0.75 + slide * 0.35);
-    }
-  }
-
-  function applyJump(machine, sample, dt) {
-    const state = machine.state;
-    const feature = sample.feature;
-    if (feature?.type !== "jump") {
-      state.airHeight += (0 - state.airHeight) * Math.min(1, dt * 8);
-      return;
-    }
-    const phase = featurePhase(sample.u, feature);
-    state.airHeight = Math.sin(phase * Math.PI) * Math.min(0.68, state.speed * 0.085);
-    const safeSpeed = 4.55 + machine.stats.air * 0.64 + machine.stats.stability * 0.24;
-    const jumpRisk = state.speed - safeSpeed;
-    if (jumpRisk > 0.88 && phase > 0.35 && phase < 0.68) {
-      courseOut(machine, sample, 0.84 + jumpRisk * 0.12);
-    }
-  }
-
-  function courseOut(machine, sample, power) {
-    const state = machine.state;
-    if (state.crash > 0.15) return;
-    state.outCount += 1;
-    state.crash = 0.92;
-    state.speed *= clamp(0.3, 0.62, 0.48 + machine.stats.toughness * 0.05);
-    state.lane = clamp(-TRACK_WIDTH * 0.28, TRACK_WIDTH * 0.28, state.lane * 0.36);
-    cameraShake = Math.max(cameraShake, 0.28 + power * 0.52);
-    spawnWorldSparks(sample.point.clone().add(sample.normal.clone().multiplyScalar(state.lane)), machine.team === 0 ? 0x55d8f0 : 0xff6461, 10 + Math.round(power * 8));
-  }
-
-  function syncMachineMesh(machine, dt) {
-    if (!machine) return;
-    const state = machine.state;
-    const sample = sampleTrack(Math.min(state.progress, track.length * LAPS - 0.001));
-    const position = sample.point.clone().add(sample.normal.clone().multiplyScalar(state.lane));
-    position.y = 0.16 + state.airHeight;
-    machine.group.position.copy(position);
-    const yaw = Math.atan2(sample.tangent.x, sample.tangent.z);
-    machine.group.rotation.set(0, yaw, -state.lane * 0.08 - sample.curveSign * Math.min(0.22, Math.abs(sample.curvature) * 0.012));
-
-    machine.group.userData.flames?.forEach((flame) => {
-      flame.visible = state.boostTimer > 0.02;
-      flame.scale.setScalar(0.85 + Math.sin(state.time * 28) * 0.12);
+  function updateFortress(fort, opponent, dt) {
+    if (fort.out || fort.coreHp <= 0) return;
+    Object.keys(fort.cooldowns).forEach((key) => {
+      fort.cooldowns[key] = Math.max(0, fort.cooldowns[key] - dt);
     });
 
-    machine.group.traverse((child) => {
-      if (child.geometry?.type === "CylinderGeometry") child.rotation.x += state.speed * dt * 2.4;
+    const direction = fort.team === 0 ? 1 : -1;
+    const desiredSpeed = direction * (0.18 + fort.stats.speed * 0.16);
+    fort.vel += (desiredSpeed - fort.vel) * Math.min(1, dt * (1.5 + fort.stats.speed * 0.35));
+    fort.x += fort.vel * dt;
+
+    slotDefs.forEach((slot) => {
+      const partId = fort.build.slots[slot.id];
+      if (partId !== "cannon" && partId !== "missile") return;
+      const cooldownKey = slot.id;
+      if ((fort.cooldowns[cooldownKey] || 0) > 0) return;
+      const distance = Math.abs(opponent.x - fort.x);
+      const rangeBonus = partId === "missile" ? 1.6 : 0.8;
+      if (distance > 2.1 + fort.stats.range * 0.35 + rangeBonus) return;
+      fireProjectile(fort, opponent, slot, partId);
+      fort.active.add(slot.id);
+      fort.cooldowns[cooldownKey] = partId === "missile" ? 1.55 : 0.95;
+    });
+
+    if ((fort.team === 0 && fort.x < -ARENA_LIMIT) || (fort.team === 1 && fort.x > ARENA_LIMIT)) {
+      fort.out = true;
+      fort.coreHp = 0;
+    }
+  }
+
+  function handleContact(dt) {
+    const dx = rivalFort.x - playerFort.x;
+    if (Math.abs(dx) > CONTACT_DISTANCE) return;
+    const pPower = contactPower(playerFort);
+    const rPower = contactPower(rivalFort);
+    const total = Math.max(0.1, pPower + rPower);
+    const push = (pPower - rPower) / total;
+    playerFort.vel -= (0.5 + rPower * 0.09 - push * 0.2) * dt;
+    rivalFort.vel += (0.5 + pPower * 0.09 + push * 0.2) * dt;
+    playerFort.coreHp -= Math.max(0.8, rPower * 0.9 - playerFort.stats.defense * 0.35) * dt;
+    rivalFort.coreHp -= Math.max(0.8, pPower * 0.9 - rivalFort.stats.defense * 0.35) * dt;
+    activateRole(playerFort, "push");
+    activateRole(rivalFort, "push");
+
+    if (Math.floor(battleTime * 8) !== Math.floor((battleTime - dt) * 8)) {
+      spawnImpact(new THREE.Vector3((playerFort.x + rivalFort.x) * 0.5, 0.82, 0), 0xffd36b, 0.46);
+      cameraShake = Math.max(cameraShake, 0.34);
+    }
+  }
+
+  function contactPower(fort) {
+    const ramCount = countPart(fort.build, "ram");
+    return fort.stats.push + ramCount * 0.9 + Math.abs(fort.vel) * fort.stats.mass * 0.45;
+  }
+
+  function fireProjectile(fort, opponent, slot, partId) {
+    const origin = slotWorldPosition(fort, slot);
+    const target = coreWorldPosition(opponent);
+    const direction = target.clone().sub(origin).normalize();
+    const speed = partId === "missile" ? 3.2 : 5.4;
+    const mesh = createProjectileMesh(partId, fort.team);
+    mesh.position.copy(origin);
+    scene.add(mesh);
+    projectiles.push({
+      owner: fort.team,
+      targetTeam: opponent.team,
+      kind: partId,
+      pos: origin,
+      vel: direction.multiplyScalar(speed),
+      life: partId === "missile" ? 3.0 : 1.8,
+      damage: partId === "missile" ? 16 : 10,
+      mesh
     });
   }
 
-  function updateHud() {
-    const targetDistance = track.length * LAPS;
-    const p = Math.min(1, playerMachine.state.progress / targetDistance);
-    const r = Math.min(1, rivalMachine.state.progress / targetDistance);
-    els.playerMeter.style.width = `${p * 100}%`;
-    els.rivalMeter.style.width = `${r * 100}%`;
-    els.clock.textContent = raceTime.toFixed(1);
-    els.resultLine.textContent = `${formatTime(playerMachine.state.finishTime || playerMachine.state.time)} / ${formatTime(rivalMachine.state.finishTime || rivalMachine.state.time)}`;
-
-    window.AsyncRacerDebug = {
-      time: raceTime,
-      trackLength: track.length,
-      player: machineDebug(playerMachine),
-      rival: machineDebug(rivalMachine)
-    };
-  }
-
-  function machineDebug(machine) {
-    return {
-      progress: machine.state.progress,
-      speed: machine.state.speed,
-      outCount: machine.state.outCount,
-      finished: machine.state.finished,
-      finishTime: machine.state.finishTime,
-      stats: machine.stats
-    };
-  }
-
-  function compareMachines() {
-    const p = raceScore(playerMachine);
-    const r = raceScore(rivalMachine);
-    if (Math.abs(p - r) < 0.03) return 0;
-    return p - r;
-  }
-
-  function raceScore(machine) {
-    if (machine.state.finishTime != null) return machine.state.finishTime + machine.state.outCount * 0.24;
-    const remaining = track.length * LAPS - machine.state.progress;
-    return MAX_RACE_TIME + remaining * 0.18 + machine.state.outCount * 0.6;
-  }
-
-  function spawnTrackSparks(machine, color, count) {
-    const sample = sampleTrack(machine.state.progress);
-    spawnWorldSparks(sample.point.clone().add(sample.normal.clone().multiplyScalar(machine.state.lane)), color, count);
-  }
-
-  function spawnWorldSparks(origin, color, count) {
-    for (let i = 0; i < count; i += 1) {
-      const angle = (TAU * i) / count;
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.025, 6, 4),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
-      );
-      mesh.position.copy(origin);
-      mesh.position.y += 0.24;
-      mesh.userData.velocity = new THREE.Vector3(Math.cos(angle) * (0.45 + i * 0.015), 0.45 + (i % 3) * 0.09, Math.sin(angle) * (0.45 + i * 0.015));
-      mesh.userData.life = 0;
-      mesh.userData.duration = 0.45;
-      scene.add(mesh);
-      particles.push(mesh);
+  function createProjectileMesh(kind, team) {
+    const color = team === 0 ? 0x55d8f0 : 0xff6461;
+    if (kind === "missile") {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.28, 10), new THREE.MeshBasicMaterial({ color }));
+      body.rotation.z = Math.PI / 2;
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 10), new THREE.MeshBasicMaterial({ color: 0xffb84e }));
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.x = 0.18;
+      group.add(body, nose);
+      return group;
     }
+    return new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 12, 8),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.94 })
+    );
   }
 
-  function updateParticles(dt) {
-    particles.forEach((particle) => {
-      particle.userData.life += dt;
-      particle.position.addScaledVector(particle.userData.velocity, dt);
-      particle.userData.velocity.y -= 2.6 * dt;
-      const t = particle.userData.life / particle.userData.duration;
-      particle.material.opacity = Math.max(0, 1 - t);
-      particle.scale.setScalar(1 + t * 0.8);
+  function updateProjectiles(dt) {
+    projectiles.forEach((shot) => {
+      const defender = shot.targetTeam === 0 ? playerFort : rivalFort;
+      if (shot.kind === "missile" && defender.coreHp > 0) {
+        const desired = coreWorldPosition(defender).sub(shot.pos).normalize().multiplyScalar(3.2);
+        shot.vel.lerp(desired, Math.min(1, dt * 2.1));
+      }
+      shot.pos.addScaledVector(shot.vel, dt);
+      shot.life -= dt;
+      shot.mesh.position.copy(shot.pos);
+      shot.mesh.rotation.y = Math.atan2(shot.vel.x, shot.vel.z);
+      if (defender.coreHp > 0 && projectileHitsFortress(shot, defender)) {
+        applyProjectileHit(shot, defender);
+        shot.life = 0;
+      }
     });
-    particles = particles.filter((particle) => {
-      if (particle.userData.life < particle.userData.duration) return true;
-      scene.remove(particle);
-      particle.geometry.dispose();
-      particle.material.dispose();
+
+    projectiles = projectiles.filter((shot) => {
+      if (shot.life > 0) return true;
+      disposeObject(shot.mesh);
       return false;
     });
   }
 
-  function clearParticles() {
-    particles.forEach((particle) => {
-      scene.remove(particle);
-      particle.geometry.dispose();
-      particle.material.dispose();
+  function projectileHitsFortress(shot, defender) {
+    const localXDistance = Math.abs(shot.pos.x - defender.x);
+    return localXDistance < 0.52 && shot.pos.y > 0.1 && shot.pos.y < 1.78 && Math.abs(shot.pos.z) < 1.42;
+  }
+
+  function applyProjectileHit(shot, defender) {
+    const hitSlot = nearestSlotByWorld(defender, shot.pos);
+    const partId = defender.build.slots[hitSlot.id] || "empty";
+    const part = parts[partId];
+    let damage = shot.damage;
+    if (partId === "shield") damage *= 0.28;
+    if (partId === "armor") damage *= 0.48;
+    if (partId === "ram") damage *= 0.74;
+    if (partId === "core") damage *= 1.22;
+    damage = Math.max(2.2, damage - defender.stats.defense * 0.38);
+    defender.coreHp -= damage;
+    defender.hitFlash = 0.18;
+    defender.active.add(hitSlot.id);
+    spawnImpact(shot.pos, part?.color || 0xffd36b, shot.kind === "missile" ? 0.58 : 0.38);
+    cameraShake = Math.max(cameraShake, shot.kind === "missile" ? 0.4 : 0.22);
+  }
+
+  function activateRole(fort, role) {
+    slotDefs.forEach((slot) => {
+      const partId = fort.build.slots[slot.id];
+      if (parts[partId]?.role === role) fort.active.add(slot.id);
     });
-    particles = [];
+  }
+
+  function battleResult() {
+    if (playerFort.coreHp <= 0 && rivalFort.coreHp <= 0) return "DRAW";
+    if (rivalFort.coreHp <= 0 || rivalFort.out) return "WIN";
+    if (playerFort.coreHp <= 0 || playerFort.out) return "LOSE";
+    return "";
+  }
+
+  function scoreResult() {
+    const p = playerFort.coreHp + playerFort.x * 3;
+    const r = rivalFort.coreHp - rivalFort.x * 3;
+    if (Math.abs(p - r) < 2) return "DRAW";
+    return p > r ? "WIN" : "LOSE";
+  }
+
+  function syncFortressMesh(fort, dt) {
+    if (!fort) return;
+    fort.hitFlash = Math.max(0, fort.hitFlash - dt);
+    fort.group.position.set(fort.x, 0, fort.team === 0 ? -0.18 : 0.18);
+    fort.group.userData.slotGroups && Object.entries(fort.group.userData.slotGroups).forEach(([slotId, group]) => {
+      const active = fort.active.has(slotId);
+      const pulse = active ? 1.12 + Math.sin(battleTime * 24) * 0.05 : 1;
+      group.scale.setScalar(pulse);
+      group.traverse((child) => {
+        if (child.userData.flame) child.visible = active || running;
+      });
+    });
+    fort.group.traverse((child) => {
+      if (child.material?.emissive && child.userData.partId !== "core") {
+        const amount = fort.hitFlash > 0 ? 0.16 : 0;
+        child.material.emissiveIntensity = amount;
+      }
+    });
+  }
+
+  function updateHud() {
+    const playerPct = clamp01(playerFort.coreHp / playerFort.stats.hp);
+    const rivalPct = clamp01(rivalFort.coreHp / rivalFort.stats.hp);
+    els.playerCore.style.width = `${playerPct * 100}%`;
+    els.rivalCore.style.width = `${rivalPct * 100}%`;
+    els.clock.textContent = battleTime.toFixed(1);
+    els.resultLine.textContent = `CORE ${Math.ceil(Math.max(0, playerFort.coreHp))} / ${Math.ceil(Math.max(0, rivalFort.coreHp))}`;
+    window.AsyncFortressDebug = {
+      time: battleTime,
+      player: fortressDebug(playerFort),
+      rival: fortressDebug(rivalFort),
+      projectiles: projectiles.length
+    };
+  }
+
+  function fortressDebug(fort) {
+    return {
+      x: fort.x,
+      hp: fort.coreHp,
+      maxHp: fort.stats.hp,
+      out: fort.out,
+      stats: fort.stats
+    };
+  }
+
+  function slotWorldPosition(fort, slot) {
+    const local = slot.local.clone();
+    const pos = local.applyAxisAngle(new THREE.Vector3(0, 1, 0), fort.team === 0 ? 0 : Math.PI);
+    pos.x += fort.x;
+    pos.z += fort.team === 0 ? -0.18 : 0.18;
+    return pos;
+  }
+
+  function coreWorldPosition(fort) {
+    const slot = slotDefs.find((item) => item.id === CORE_SLOT);
+    return slotWorldPosition(fort, slot);
+  }
+
+  function nearestSlotByWorld(fort, pos) {
+    let best = slotDefs[0];
+    let bestDistance = Infinity;
+    slotDefs.forEach((slot) => {
+      const slotPos = slotWorldPosition(fort, slot);
+      const distance = Math.hypot(slotPos.y - pos.y, slotPos.z - pos.z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = slot;
+      }
+    });
+    return best;
+  }
+
+  function spawnImpact(origin, color, power) {
+    const group = new THREE.Group();
+    group.position.copy(origin);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.08 + power * 0.08, 0.008, 6, 32),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.76, depthWrite: false })
+    );
+    ring.rotation.x = Math.PI / 2;
+    group.add(ring);
+
+    const sparks = [];
+    const count = 8 + Math.round(power * 12);
+    for (let i = 0; i < count; i += 1) {
+      const angle = (TAU * i) / count;
+      const spark = new THREE.Mesh(
+        new THREE.SphereGeometry(0.018, 6, 4),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+      );
+      spark.userData.velocity = new THREE.Vector3(Math.cos(angle) * (0.6 + power), 0.3 + Math.random() * 0.8, Math.sin(angle) * (0.6 + power));
+      group.add(spark);
+      sparks.push(spark);
+    }
+    scene.add(group);
+    effects.push({ group, ring, sparks, life: 0, duration: 0.34 + power * 0.2, power });
+  }
+
+  function updateEffects(dt) {
+    effects.forEach((effect) => {
+      effect.life += dt;
+      const t = Math.min(1, effect.life / effect.duration);
+      effect.ring.scale.setScalar(1 + t * (2.2 + effect.power));
+      effect.ring.material.opacity = (1 - t) * 0.76;
+      effect.sparks.forEach((spark) => {
+        spark.position.addScaledVector(spark.userData.velocity, dt);
+        spark.userData.velocity.y -= 2.6 * dt;
+        spark.material.opacity = (1 - t) * 0.9;
+      });
+    });
+    effects = effects.filter((effect) => {
+      if (effect.life < effect.duration) return true;
+      disposeObject(effect.group);
+      return false;
+    });
+  }
+
+  function clearProjectiles() {
+    projectiles.forEach((shot) => disposeObject(shot.mesh));
+    projectiles = [];
+  }
+
+  function clearEffects() {
+    effects.forEach((effect) => disposeObject(effect.group));
+    effects = [];
+  }
+
+  function disposeObject(object) {
+    if (object.parent) object.parent.remove(object);
+    object.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose());
+      else if (child.material) child.material.dispose();
+    });
   }
 
   function updateCamera(dt) {
     const compact = window.innerWidth < 760;
-    const leader = playerMachine.state.progress >= rivalMachine.state.progress ? playerMachine : rivalMachine;
-    const sample = sampleTrack(leader.state.progress);
-    target.x += (sample.point.x - target.x) * Math.min(1, dt * 2.6);
-    target.z += (sample.point.z - target.z) * Math.min(1, dt * 2.6);
-    const height = compact ? 8.8 : 7.4;
-    const distance = compact ? 6.7 : 6.0;
-    const desired = new THREE.Vector3(target.x, height, target.z + distance);
+    const midpoint = (playerFort.x + rivalFort.x) * 0.5;
+    target.x += (midpoint * 0.25 - target.x) * Math.min(1, dt * 2.4);
+    target.y += (0.78 - target.y) * Math.min(1, dt * 2.4);
+    target.z += (0 - target.z) * Math.min(1, dt * 2.4);
+    const height = compact ? 5.9 : 4.9;
+    const distance = compact ? 8.4 : 7.0;
+    const desired = new THREE.Vector3(target.x, height, distance);
     const shake = cameraShake * (compact ? 0.08 : 0.1);
-    desired.x += Math.sin(raceTime * 48) * shake;
-    desired.y += Math.cos(raceTime * 37) * shake * 0.35;
-    desired.z += Math.cos(raceTime * 42) * shake;
+    desired.x += Math.sin(battleTime * 52) * shake;
+    desired.y += Math.cos(battleTime * 41) * shake * 0.35;
+    desired.z += Math.cos(battleTime * 47) * shake;
     camera.position.lerp(desired, Math.min(1, dt * 2.2));
-    camera.lookAt(target.x, 0.1, target.z);
+    camera.lookAt(target.x, target.y, target.z);
   }
 
   function resize() {
@@ -1108,35 +1050,39 @@
     const height = window.innerHeight;
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
-    camera.fov = width < 760 ? 50 : 44;
+    camera.fov = width < 760 ? 52 : 44;
     camera.updateProjectionMatrix();
   }
 
-  function encodeBuild(build) {
-    const payload = JSON.stringify(sanitizeBuild(build));
-    return `MR1.${btoa(unescape(encodeURIComponent(payload)))}`;
+  function encodeFortress(build) {
+    const payload = JSON.stringify(sanitizeFortress(build));
+    return `AF1.${btoa(unescape(encodeURIComponent(payload)))}`;
   }
 
-  function decodeBuild(source) {
+  function decodeFortress(source) {
     const text = source.trim();
     if (!text) throw new Error("empty");
-    if (text.startsWith("MR1.")) {
-      return sanitizeBuild(JSON.parse(decodeURIComponent(escape(atob(text.slice(4))))));
+    if (text.startsWith("AF1.")) {
+      return sanitizeFortress(JSON.parse(decodeURIComponent(escape(atob(text.slice(4))))));
     }
-    return sanitizeBuild(JSON.parse(text));
+    return sanitizeFortress(JSON.parse(text));
   }
 
-  function sanitizeBuild(value) {
-    const clean = makeBuild(String(value.name || "Loaded Mini").slice(0, 18), {});
+  function sanitizeFortress(value) {
+    const clean = makeFortress(String(value.name || "Loaded Fortress").slice(0, 18), {});
     slotDefs.forEach((slot) => {
-      const partId = value.slots && parts[value.slots[slot.id]] ? value.slots[slot.id] : "empty";
+      if (slot.fixed) {
+        clean.slots[slot.id] = "core";
+        return;
+      }
+      const partId = value.slots && parts[value.slots[slot.id]] && value.slots[slot.id] !== "core" ? value.slots[slot.id] : "empty";
       clean.slots[slot.id] = partId;
     });
     return clean;
   }
 
-  function formatTime(value) {
-    return value == null ? "--.--" : value.toFixed(2);
+  function countPart(build, partId) {
+    return slotDefs.reduce((sum, slot) => sum + (build.slots[slot.id] === partId ? 1 : 0), 0);
   }
 
   function normalize(value, min, max) {
@@ -1149,12 +1095,6 @@
 
   function clamp01(value) {
     return clamp(0, 1, value);
-  }
-
-  function wrap01(value) {
-    let wrapped = value % 1;
-    if (wrapped < 0) wrapped += 1;
-    return wrapped;
   }
 
   function clone(value) {
