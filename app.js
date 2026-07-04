@@ -521,7 +521,7 @@
       pendingT: 0,
       record: !replay,
       cell,
-      clashGap: Math.round(cell * 0.58),
+      clashGap: Math.round(cell * 1.05),
       shake: 0,
       flash: 0,
       slow: 0,
@@ -529,6 +529,7 @@
       debris: [],
       events: [],
       eventCounts: {},
+      hasClashed: false,
       player: makeBattleBot(state.build, 1, -cell * 1.8, cell),
       enemy: makeBattleBot(enemy, -1, state.w + cell * 1.8, cell),
       enemyName: enemy.name,
@@ -640,16 +641,8 @@
       const p = coreHp(b.player);
       const e = coreHp(b.enemy);
       const result = p === e ? (liveMass(b.player) >= liveMass(b.enemy) ? "WIN" : "LOSE") : p > e ? "WIN" : "LOSE";
-      breakDecisionCore(result, b);
       endFight(result);
     }
-  }
-
-  function breakDecisionCore(result, battle) {
-    const bot = result === "WIN" ? battle.enemy : result === "LOSE" ? battle.player : null;
-    if (!bot) return;
-    const c = bot.parts.find((p) => p.type === "core" && p.alive);
-    if (c) damagePart(bot, c, c.hp + 1, bot.x, bot.y, battle, "finish");
   }
 
   function endFight(result) {
@@ -711,8 +704,6 @@
       bot.stepPose = 1;
       if (b.phase === "approach") {
         bot.x += bot.facing * (7 + movers * 3 + wheels * 6) / Math.max(1, 1 + weights * 0.18);
-      } else if (b.phase === "clash" && bot.stagger <= 0) {
-        bot.x += bot.facing * Math.max(1, 3 + wheels - weights);
       }
     }
     const ground = fightGround() + bot.groundOffset;
@@ -728,17 +719,18 @@
     const gap = ef.front - pf.front;
     if (b.intro > 0) {
       b.phase = "intro";
-    } else if (gap > b.clashGap + b.cell * 0.28) {
+    } else if (!b.hasClashed && gap > b.clashGap + b.cell * 0.08) {
       b.phase = "approach";
     } else {
-      if (b.phase !== "clash") {
+      if (!b.hasClashed) {
         eventAt(b, "recoil", state.w / 2, fightGround() - b.cell, 0.22);
         b.shake = Math.max(b.shake, 6);
       }
+      b.hasClashed = true;
       b.phase = "clash";
     }
 
-    if (b.phase === "intro" || b.phase === "approach") {
+    if (!b.hasClashed && (b.phase === "intro" || b.phase === "approach")) {
       const ps = approachSpeed(player);
       const es = approachSpeed(enemy);
       player.x += player.facing * ps * dt;
@@ -752,10 +744,6 @@
       const fix = (b.clashGap - nowGap) * 0.5;
       player.x -= fix;
       enemy.x += fix;
-    } else if (b.phase === "clash" && nowGap > b.clashGap + 18) {
-      const close = Math.min(16, nowGap - b.clashGap) * dt * 3;
-      player.x += close;
-      enemy.x -= close;
     }
   }
 
@@ -825,7 +813,7 @@
     if (dir.x * attacker.facing < 0.55) return;
     const pos = partWorld(attacker, p, battle.cell);
     const start = { x: pos.x + dir.x * battle.cell * 0.25, y: pos.y + dir.y * battle.cell * 0.25 };
-    const end = { x: pos.x + dir.x * battle.cell * 1.42, y: pos.y + dir.y * battle.cell * 1.42 };
+    const end = { x: pos.x + dir.x * battle.cell * 2.08, y: pos.y + dir.y * battle.cell * 2.08 };
     const target = firstLineTarget(defender, start, end, battle.cell * 0.42, battle);
     if (!target) return;
     p.cooldown = 0.78;
@@ -880,7 +868,6 @@
     damagePart(defender, target.part, target.part.type === "core" ? 5.2 : 5, pos.x, pos.y, battle, "hammer");
     defender.stagger = Math.max(defender.stagger, 0.42);
     defender.recoil = Math.max(defender.recoil, 15);
-    defender.x += attacker.facing * 10 / Math.max(1, defender.mass * 0.25);
   }
 
   function blockAttack(attacker, defender, shield, source, impact, battle, amount) {
@@ -889,7 +876,6 @@
     damagePart(defender, shield, amount, source.x, source.y, battle, "block");
     attacker.stagger = Math.max(attacker.stagger, 0.18);
     attacker.recoil = Math.max(attacker.recoil, 18);
-    attacker.x -= attacker.facing * 10;
   }
 
   function firstLineTarget(bot, start, end, width, battle) {
@@ -922,8 +908,8 @@
       const vy = w.y - origin.y;
       const ahead = vx * dir.x + vy * dir.y;
       const side = Math.abs(vx * -dir.y + vy * dir.x);
-      if (ahead < battle.cell * 0.1 || ahead > battle.cell * 1.75) continue;
-      if (side > battle.cell * 1.02) continue;
+      if (ahead < battle.cell * 0.1 || ahead > battle.cell * 2.15) continue;
+      if (side > battle.cell * 1.08) continue;
       const highBias = Math.max(0, (CORE_Y - p.y) * 9);
       const score = ahead + side * 0.65 - highBias - (p.type === "shield" ? battle.cell * 0.25 : 0);
       if (!best || score < best.score) best = { part: p, x: w.x, y: w.y, score };
@@ -1867,6 +1853,9 @@
     canvas.dataset.hp = state.battle ? `${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))}` : "";
     canvas.dataset.phase = state.battle?.phase || "";
     canvas.dataset.events = state.battle ? JSON.stringify(state.battle.eventCounts) : "";
+    canvas.dataset.gap = state.battle
+      ? String(Math.round(frontBounds(state.battle.enemy, state.battle.cell).front - frontBounds(state.battle.player, state.battle.cell).front))
+      : "";
     canvas.dataset.fight = state.battle
       ? `${state.battle.t.toFixed(1)},${Math.round(state.battle.player.x)},${Math.round(state.battle.enemy.x)},${state.battle.player.parts.filter((p) => p.alive).length},${state.battle.enemy.parts.filter((p) => p.alive).length}`
       : "";
