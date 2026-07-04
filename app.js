@@ -10,8 +10,8 @@
   const GRID_H = 7;
   const CORE_X = 5;
   const CORE_Y = 3;
-  const MAX_PARTS = 10;
-  const MAX_FIGHT = 12;
+  const MAX_PARTS = 8;
+  const MAX_FIGHT = 15;
   const DIRS = [
     { x: 0, y: -1 },
     { x: 1, y: 0 },
@@ -34,7 +34,7 @@
     jaw: { hp: 8, mass: 1.4 },
   };
 
-  const TRAY = ["leg", "wheel", "spike", "shield", "hammer", "weight", "wing", "spring", "bomb", "jaw"];
+  const TRAY = ["leg", "wheel", "spike", "shield", "hammer", "weight", "bomb"];
   const LS = {
     build: "eggcore.toy.build",
     defense: "eggcore.toy.defense",
@@ -91,7 +91,7 @@
     const seen = new Set();
     const parts = [];
     for (const raw of build.parts || []) {
-      if (!PARTS[raw.type]) continue;
+      if (!PARTS[raw.type] || (raw.type !== "core" && !TRAY.includes(raw.type))) continue;
       const x = clamp(Math.round(raw.x), 0, GRID_W - 1);
       const y = clamp(Math.round(raw.y), 0, GRID_H - 1);
       const key = `${x},${y}`;
@@ -139,20 +139,9 @@
         parts: [
           core(),
           placed("shield", 6, 3, 1),
-          placed("shield", 6, 4, 1),
-          placed("hammer", 5, 2, 1),
+          placed("hammer", 6, 2, 1),
           placed("weight", 5, 4, 2),
           placed("leg", 4, 4, 2),
-        ],
-      }),
-      normalizeBuild({
-        name: "Flyer",
-        parts: [
-          core(),
-          placed("wing", 5, 2, 0),
-          placed("wing", 4, 2, 3),
-          placed("jaw", 6, 3, 1),
-          placed("leg", 5, 4, 2),
         ],
       }),
       normalizeBuild({
@@ -160,7 +149,7 @@
         parts: [
           core(),
           placed("bomb", 6, 3, 1),
-          placed("shield", 5, 2, 0),
+          placed("weight", 4, 3, 3),
           placed("leg", 4, 4, 2),
           placed("leg", 5, 4, 2),
         ],
@@ -176,9 +165,18 @@
           placed("wheel", 6, 4, 2),
         ],
       }),
+      normalizeBuild({
+        name: "Hammer Head",
+        parts: [
+          core(),
+          placed("shield", 6, 3, 1),
+          placed("hammer", 6, 2, 1),
+          placed("leg", 5, 4, 2),
+          placed("leg", 6, 4, 2),
+          placed("weight", 4, 3, 3),
+        ],
+      }),
     ];
-    const defense = loadDefense();
-    if (defense) enemies.push({ ...defense, name: "DEF" });
     return enemies;
   }
 
@@ -209,6 +207,7 @@
     const p = placed(state.selectedType, x, y, state.selectedRot);
     state.build.parts.push(p);
     state.selectedPartId = p.id;
+    state.hoverCell = null;
     saveBuild();
     blip("");
   }
@@ -256,7 +255,7 @@
   function randomBuild() {
     const parts = [core()];
     let guard = 0;
-    while (parts.length < 8 && guard < 160) {
+    while (parts.length < MAX_PARTS + 1 && guard < 180) {
       guard += 1;
       const anchor = parts[Math.floor(Math.random() * parts.length)];
       const d = DIRS[Math.floor(Math.random() * DIRS.length)];
@@ -355,6 +354,10 @@
     state.hits.push({ kind, x, y, w, h, ...data });
   }
 
+  function hitAt(x, y, kind = "") {
+    return state.hits.slice().reverse().find((h) => (!kind || h.kind === kind) && rectHit(h, x, y));
+  }
+
   function pointerPos(event) {
     const rect = canvas.getBoundingClientRect();
     return {
@@ -367,30 +370,18 @@
     event.preventDefault();
     const p = pointerPos(event);
     state.pointer = p;
-    state.hoverCell = state.mode === "garage" ? cellFromPoint(p.x, p.y) : null;
+    const socket = state.mode === "garage" ? hitAt(p.x, p.y, "socket") : null;
+    state.hoverCell = socket ? { x: socket.gx, y: socket.gy } : null;
   }
 
   function onPointerDown(event) {
     event.preventDefault();
     const p = pointerPos(event);
     state.pointer = p;
-    const hit = state.hits.slice().reverse().find((h) => rectHit(h, p.x, p.y));
+    const hit = hitAt(p.x, p.y);
     if (hit) {
       handleHit(hit);
       return;
-    }
-    if (state.mode === "garage") {
-      const cell = cellFromPoint(p.x, p.y);
-      state.hoverCell = cell;
-      if (!cell) return;
-      const existing = getAt(state.build.parts, cell.x, cell.y);
-      if (existing) {
-        state.selectedPartId = existing.id;
-        state.selectedType = existing.type === "core" ? state.selectedType : existing.type;
-        state.selectedRot = existing.rotation;
-      } else {
-        placePart(cell.x, cell.y);
-      }
     }
   }
 
@@ -399,6 +390,16 @@
       state.selectedType = hit.type;
       state.selectedRot = defaultRotation(hit.type);
       state.selectedPartId = null;
+    } else if (hit.kind === "socket") {
+      state.hoverCell = { x: hit.gx, y: hit.gy };
+      placePart(hit.gx, hit.gy);
+    } else if (hit.kind === "part") {
+      const existing = state.build.parts.find((p) => p.id === hit.id);
+      if (existing) {
+        state.selectedPartId = existing.id;
+        if (existing.type !== "core") state.selectedType = existing.type;
+        state.selectedRot = existing.rotation;
+      }
     } else if (hit.kind === "rotate") {
       rotateSelected();
     } else if (hit.kind === "delete") {
@@ -432,18 +433,21 @@
   function layoutGarage() {
     const w = Math.min(state.w, Math.round(window.innerWidth || state.w));
     const h = Math.min(state.h, Math.round(window.innerHeight || state.h));
-    const pad = Math.max(12, Math.floor(w * 0.04));
+    const pad = Math.max(14, Math.floor(w * 0.04));
     const trayGap = 8;
-    const traySize = Math.floor(Math.min(62, (w - pad * 2 - trayGap * 4) / 5));
+    const traySize = Math.floor(Math.min(64, (w - pad * 2 - trayGap * 3) / 4));
     const trayH = traySize * 2 + trayGap;
-    const actionH = Math.max(46, Math.min(58, traySize * 0.9));
-    const actionY = h - pad - trayH - 12 - actionH;
+    const actionH = Math.max(46, Math.min(54, traySize * 0.82));
     const trayY = h - pad - trayH;
-    const gridTop = 58;
-    const maxGridH = Math.max(180, actionY - gridTop - 22);
-    const cell = Math.floor(Math.min(38, Math.max(30, Math.min((w - pad * 2 - 4) / GRID_W, maxGridH / GRID_H))));
-    const gridW = cell * GRID_W;
-    const gridH = cell * GRID_H;
+    const actionY = trayY - 12 - actionH;
+    const botTop = 62;
+    const botBottom = actionY - 18;
+    const botH = Math.max(250, botBottom - botTop);
+    const e = buildExtents(state.build.parts);
+    const cellsW = Math.max(3.2, e.maxX - e.minX + 1.15);
+    const cellsH = Math.max(3.4, e.maxY - e.minY + 1.25);
+    const gap = Math.floor(Math.min(70, Math.max(48, Math.min((w - pad * 2 - 22) / cellsW, (botH - 24) / cellsH))));
+    const bot = botLayout(state.build, w / 2, botTop + botH * 0.48, gap);
     return {
       pad,
       trayGap,
@@ -452,29 +456,54 @@
       trayH,
       actionY,
       actionH,
-      cell,
-      gridX: Math.round((w - gridW) / 2),
-      gridY: Math.round(gridTop + (maxGridH - gridH) * 0.42),
-      gridW,
-      gridH,
+      botTop,
+      botBottom,
+      gap,
+      partSize: Math.round(gap * 0.96),
+      bot,
     };
   }
 
   function cellFromPoint(x, y) {
-    const l = layoutGarage();
-    const gx = Math.floor((x - l.gridX) / l.cell);
-    const gy = Math.floor((y - l.gridY) / l.cell);
-    if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return null;
-    return { x: gx, y: gy };
+    const hit = hitAt(x, y, "socket");
+    return hit ? { x: hit.gx, y: hit.gy } : null;
+  }
+
+  function buildExtents(parts) {
+    const live = parts.length ? parts : [core()];
+    return {
+      minX: Math.min(...live.map((p) => p.x)),
+      maxX: Math.max(...live.map((p) => p.x)),
+      minY: Math.min(...live.map((p) => p.y)),
+      maxY: Math.max(...live.map((p) => p.y)),
+    };
+  }
+
+  function botLayout(build, centerX, centerY, gap) {
+    const e = buildExtents(build.parts);
+    const minX = (e.minX - CORE_X) * gap;
+    const maxX = (e.maxX - CORE_X) * gap;
+    const minY = (e.minY - CORE_Y) * gap;
+    const maxY = (e.maxY - CORE_Y) * gap;
+    const ox = Math.round(centerX - (minX + maxX) / 2);
+    const oy = Math.round(centerY - (minY + maxY) / 2);
+    return { ox, oy, gap };
+  }
+
+  function garagePoint(l, gx, gy) {
+    return {
+      x: l.bot.ox + (gx - CORE_X) * l.gap,
+      y: l.bot.oy + (gy - CORE_Y) * l.gap,
+    };
   }
 
   function startFight(replay) {
     const enemy = state.enemies[state.enemyIndex];
     state.mode = "fight";
-    const cell = clamp(Math.floor(state.w / 10.6), 30, 36);
+    const cell = clamp(Math.floor(state.w / 7.8), 46, 54);
     state.battle = {
       t: 0,
-      intro: replay ? 0.25 : 0.55,
+      intro: replay ? 0.35 : 0.9,
       result: "",
       pending: "",
       pendingT: 0,
@@ -483,8 +512,8 @@
       shake: 0,
       flash: 0,
       particles: [],
-      player: makeBattleBot(state.build, 1, -cell * 1.2, cell),
-      enemy: makeBattleBot(enemy, -1, state.w + cell * 1.2, cell),
+      player: makeBattleBot(state.build, 1, -cell * 2.1, cell),
+      enemy: makeBattleBot(enemy, -1, state.w + cell * 2.1, cell),
       enemyName: enemy.name,
     };
   }
@@ -511,17 +540,18 @@
       mass: 1,
       bottom: cell * 0.5,
       top: -cell * 0.5,
+      groundOffset: facing === 1 ? -10 : 10,
       parts,
       coreFlash: 0,
       dead: false,
     };
     recalcBot(bot, cell);
-    bot.y = fightGround() - bot.bottom;
+    bot.y = fightGround() + bot.groundOffset - bot.bottom;
     return bot;
   }
 
   function fightGround() {
-    return Math.round(state.h * 0.66);
+    return Math.round(state.h * 0.72);
   }
 
   function recalcBot(bot, cell) {
@@ -561,6 +591,7 @@
     updateBot(b.player, b.enemy, simDt, b);
     updateBot(b.enemy, b.player, simDt, b);
     collideBots(b.player, b.enemy, simDt, b);
+    separateBots(b.player, b.enemy, b);
     attackBot(b.player, b.enemy, simDt, b);
     attackBot(b.enemy, b.player, simDt, b);
     crashPressure(b.player, b.enemy, simDt, b);
@@ -574,8 +605,17 @@
     else if (b.t >= MAX_FIGHT) {
       const p = coreHp(b.player);
       const e = coreHp(b.enemy);
-      endFight(p === e ? (liveMass(b.player) >= liveMass(b.enemy) ? "WIN" : "LOSE") : p > e ? "WIN" : "LOSE");
+      const result = p === e ? (liveMass(b.player) >= liveMass(b.enemy) ? "WIN" : "LOSE") : p > e ? "WIN" : "LOSE";
+      breakDecisionCore(result, b);
+      endFight(result);
     }
+  }
+
+  function breakDecisionCore(result, battle) {
+    const bot = result === "WIN" ? battle.enemy : result === "LOSE" ? battle.player : null;
+    if (!bot) return;
+    const c = bot.parts.find((p) => p.type === "core" && p.alive);
+    if (c) damagePart(bot, c, c.hp + 1, bot.x, bot.y, battle, "finish");
   }
 
   function endFight(result) {
@@ -614,7 +654,7 @@
     bot.vy += (105 - lift / Math.max(1, bot.mass * 0.22)) * dt;
     bot.x += bot.vx * dt;
     bot.y += bot.vy * dt;
-    const ground = fightGround();
+    const ground = fightGround() + bot.groundOffset;
     if (bot.y + bot.bottom > ground) {
       bot.y = ground - bot.bottom;
       bot.vy *= -0.08;
@@ -650,12 +690,12 @@
         const dx = pb.x - pa.x;
         const dy = pb.y - pa.y;
         const d = Math.hypot(dx, dy) || 0.001;
-        const min = battle.cell * 0.88;
+        const min = battle.cell * 0.98;
         if (d > min) continue;
         const nx = dx / d;
         const ny = dy / d;
         const spring = pa.part.type === "spring" || pb.part.type === "spring";
-        const push = (min - d) * (spring ? 34 : 18);
+        const push = (min - d) * (spring ? 44 : 25);
         a.vx -= (nx * push * dt * b.mass) / (a.mass + b.mass);
         b.vx += (nx * push * dt * a.mass) / (a.mass + b.mass);
         a.vy -= ny * push * dt * 0.3;
@@ -672,6 +712,21 @@
     }
   }
 
+  function separateBots(a, b, battle) {
+    const dx = b.x - a.x;
+    const desired = battle.cell * 2.25;
+    const adx = Math.abs(dx) || 0.001;
+    if (adx >= desired) return;
+    const dir = dx >= 0 ? 1 : -1;
+    const push = (desired - adx) * 0.54;
+    a.x -= dir * push * (b.mass / (a.mass + b.mass));
+    b.x += dir * push * (a.mass / (a.mass + b.mass));
+    a.vx *= 0.34;
+    b.vx *= 0.34;
+    battle.shake = Math.max(battle.shake, 3 + (desired - adx) * 0.04);
+    if (Math.random() < 0.18) spark((a.x + b.x) / 2, (a.y + b.y) / 2 - battle.cell * 0.2, battle, 2);
+  }
+
   function attackBot(attacker, defender, dt, battle) {
     for (const p of attacker.parts) {
       if (!p.alive) continue;
@@ -680,20 +735,20 @@
       if (p.type === "spike") {
         const hx = pos.x + dir.x * battle.cell * 0.74;
         const hy = pos.y + dir.y * battle.cell * 0.74;
-        if (hitNearest(defender, hx, hy, battle.cell * 0.58, 14 * dt, battle, "spike")) {
+        if (hitNearest(defender, hx, hy, battle.cell * 0.58, 8.0 * dt, battle, "spike")) {
           spark(hx, hy, battle, 3);
         }
       } else if (p.type === "hammer" && p.cool <= 0) {
         const hx = pos.x + dir.x * battle.cell * 1.05;
         const hy = pos.y + dir.y * battle.cell * 1.05;
+        p.swing = 0.32;
         if (hitNearest(defender, hx, hy, battle.cell * 0.92, 4.8, battle, "hammer")) {
           defender.vx += dir.x * 42;
           defender.vy += dir.y * 14;
-          p.swing = 0.28;
           battle.shake = Math.max(battle.shake, 7);
           shock(hx, hy, battle);
         }
-        p.cool = 0.78;
+        p.cool = 0.82;
       } else if (p.type === "jaw" && p.cool <= 0) {
         const hx = pos.x + dir.x * battle.cell * 0.86;
         const hy = pos.y + dir.y * battle.cell * 0.86;
@@ -713,7 +768,7 @@
     if (dx > reach) return;
     const power = botPower(attacker);
     const squeeze = 1 - dx / reach;
-    const amount = (1.8 + power * 0.028) * squeeze * dt;
+    const amount = (0.82 + power * 0.014) * squeeze * dt;
     const target = nearestLivePart(defender, attacker.x, attacker.y, battle.cell);
     if (!target) return;
     damagePart(defender, target.part, amount, attacker.x, attacker.y, battle, "crash");
@@ -805,7 +860,14 @@
     const live = bot.parts.filter((p) => p.alive);
     const map = new Map(live.map((p) => [`${p.x},${p.y}`, p]));
     const root = `${CORE_X},${CORE_Y}`;
-    if (!map.has(root)) return;
+    if (!map.has(root)) {
+      for (const p of live) {
+        p.alive = false;
+        const w = partWorld(bot, p, battle.cell);
+        burst(w.x, w.y, 8, battle, 0.9);
+      }
+      return;
+    }
     const keep = new Set([root]);
     const open = [{ x: CORE_X, y: CORE_Y }];
     while (open.length) {
@@ -935,17 +997,15 @@
 
   function drawGarage() {
     const l = layoutGarage();
-    canvas.dataset.cell = String(l.cell);
+    canvas.dataset.cell = String(l.gap);
     canvas.dataset.screen = `${state.w}x${state.h}`;
     canvas.dataset.inner = `${window.innerWidth}x${window.innerHeight}`;
     canvas.dataset.mode = state.mode;
     canvas.dataset.parts = String(partCount());
     text("GARAGE", l.pad, 18, 20, "left");
-    drawTinyButton("SAVE", state.w - l.pad - 98, 13, 45, 28, "save");
-    drawTinyButton("DEF", state.w - l.pad - 47, 13, 47, 28, "def");
-    drawPartDots(state.w - l.pad - 110, 50);
-    drawGrid(l);
+    drawPartDots(state.w - l.pad - 86, 22);
     drawGarageBot(l);
+    drawGarageSockets(l);
     drawActionBar(l);
     drawTray(l);
   }
@@ -957,51 +1017,107 @@
     }
   }
 
-  function drawGrid(l) {
-    ctx.save();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2;
-    for (let y = 0; y < GRID_H; y += 1) {
-      for (let x = 0; x < GRID_W; x += 1) {
-        const px = l.gridX + x * l.cell;
-        const py = l.gridY + y * l.cell;
-        ctx.strokeRect(px, py, l.cell, l.cell);
-        if (canPlace(x, y)) {
-          ctx.fillStyle = PALE;
-          ctx.fillRect(px + l.cell / 2 - 2, py + l.cell / 2 - 2, 4, 4);
-        }
+  function socketCells() {
+    const cells = [];
+    const seen = new Set();
+    for (const p of state.build.parts) {
+      for (const d of DIRS) {
+        const gx = p.x + d.x;
+        const gy = p.y + d.y;
+        const key = `${gx},${gy}`;
+        if (seen.has(key) || !canPlace(gx, gy)) continue;
+        seen.add(key);
+        cells.push({ x: gx, y: gy });
       }
     }
-    if (state.hoverCell) {
-      const x = l.gridX + state.hoverCell.x * l.cell;
-      const y = l.gridY + state.hoverCell.y * l.cell;
-      ctx.setLineDash([5, 4]);
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x + 4, y + 4, l.cell - 8, l.cell - 8);
+    return cells;
+  }
+
+  function drawGarageSockets(l) {
+    ctx.save();
+    const cells = socketCells();
+    for (const c of cells) {
+      const p = garagePoint(l, c.x, c.y);
+      const hover = state.hoverCell && state.hoverCell.x === c.x && state.hoverCell.y === c.y;
+      const r = hover ? 13 : 10;
+      ctx.strokeStyle = INK;
+      ctx.fillStyle = hover ? INK : PAPER;
+      ctx.lineWidth = hover ? 4 : 3;
+      ctx.setLineDash(hover ? [] : [2, 5]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
       ctx.setLineDash([]);
+      if (hover) {
+        ctx.save();
+        ctx.globalAlpha = 0.34;
+        const near = nearestGarageNeighbor(c.x, c.y);
+        if (near) {
+          const n = garagePoint(l, near.x, near.y);
+          ctx.strokeStyle = INK;
+          ctx.lineWidth = 9;
+          ctx.beginPath();
+          ctx.moveTo(n.x, n.y);
+          ctx.lineTo(p.x, p.y);
+          ctx.stroke();
+        }
+        drawPart(state.selectedType, p.x, p.y, l.partSize * 1.05, state.selectedRot, { mode: "garage" });
+        ctx.restore();
+      }
+      addHit("socket", p.x - 22, p.y - 22, 44, 44, { gx: c.x, gy: c.y });
     }
     ctx.restore();
   }
 
   function drawGarageBot(l) {
+    drawGarageConnections(l);
     for (const p of state.build.parts) {
-      const x = l.gridX + (p.x + 0.5) * l.cell;
-      const y = l.gridY + (p.y + 0.5) * l.cell;
+      const g = garagePoint(l, p.x, p.y);
       const selected = p.id === state.selectedPartId;
       if (selected) {
         ctx.strokeStyle = INK;
         ctx.lineWidth = 4;
-        ctx.strokeRect(x - l.cell / 2 + 4, y - l.cell / 2 + 4, l.cell - 8, l.cell - 8);
+        ctx.setLineDash([8, 5]);
+        ctx.strokeRect(g.x - l.gap * 0.47, g.y - l.gap * 0.47, l.gap * 0.94, l.gap * 0.94);
+        ctx.setLineDash([]);
       }
-      drawPart(p.type, x, y, l.cell * (p.type === "core" ? 0.98 : 0.9), p.rotation, { flash: 0 });
+      drawPart(p.type, g.x, g.y, p.type === "core" ? l.gap * 1.32 : l.partSize, p.rotation, {
+        mode: "garage",
+        flash: 0,
+      });
+      addHit("part", g.x - l.gap * 0.48, g.y - l.gap * 0.48, l.gap * 0.96, l.gap * 0.96, { id: p.id });
     }
-    if (state.hoverCell && !getAt(state.build.parts, state.hoverCell.x, state.hoverCell.y)) {
-      const x = l.gridX + (state.hoverCell.x + 0.5) * l.cell;
-      const y = l.gridY + (state.hoverCell.y + 0.5) * l.cell;
-      ctx.globalAlpha = canPlace(state.hoverCell.x, state.hoverCell.y) ? 0.45 : 0.16;
-      drawPart(state.selectedType, x, y, l.cell * 0.88, state.selectedRot, {});
-      ctx.globalAlpha = 1;
+  }
+
+  function nearestGarageNeighbor(gx, gy) {
+    for (const d of DIRS) {
+      const p = getAt(state.build.parts, gx + d.x, gy + d.y);
+      if (p) return p;
     }
+    return null;
+  }
+
+  function drawGarageConnections(l) {
+    ctx.save();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = Math.max(8, Math.round(l.gap * 0.15));
+    ctx.lineCap = "square";
+    for (const p of state.build.parts) {
+      for (const d of [{ x: 1, y: 0 }, { x: 0, y: 1 }]) {
+        const q = getAt(state.build.parts, p.x + d.x, p.y + d.y);
+        if (!q) continue;
+        const a = garagePoint(l, p.x, p.y);
+        const b = garagePoint(l, q.x, q.y);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.fillStyle = PAPER;
+        ctx.fillRect((a.x + b.x) / 2 - 4, (a.y + b.y) / 2 - 4, 8, 8);
+      }
+    }
+    ctx.restore();
   }
 
   function drawActionBar(l) {
@@ -1023,47 +1139,18 @@
     ctx.lineWidth = 4;
     ctx.fillRect(x, y, w, h);
     ctx.strokeRect(x, y, w, h);
-    if (kind === "fight") {
-      text("FIGHT", x + w / 2, y + h / 2 + 1, 16, "center", PAPER);
-      return;
-    }
-    ctx.save();
-    ctx.translate(x + w / 2, y + h / 2);
-    ctx.strokeStyle = INK;
-    ctx.fillStyle = INK;
-    ctx.lineWidth = 4;
-    if (kind === "rotate") {
-      ctx.beginPath();
-      ctx.arc(0, 0, 12, Math.PI * 0.2, Math.PI * 1.6);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(2, -17);
-      ctx.lineTo(14, -16);
-      ctx.lineTo(8, -6);
-      ctx.fill();
-    } else if (kind === "delete") {
-      ctx.strokeRect(-10, -8, 20, 21);
-      ctx.fillRect(-13, -15, 26, 4);
-      ctx.fillRect(-5, -20, 10, 4);
-      ctx.beginPath();
-      ctx.moveTo(-4, -2);
-      ctx.lineTo(-4, 9);
-      ctx.moveTo(4, -2);
-      ctx.lineTo(4, 9);
-      ctx.stroke();
-    } else if (kind === "random") {
-      ctx.strokeRect(-14, -14, 28, 28);
-      for (const d of [[-6, -6], [6, -6], [0, 0], [-6, 6], [6, 6]]) ctx.fillRect(d[0] - 2, d[1] - 2, 4, 4);
-    }
-    ctx.restore();
+    const label = kind === "rotate" ? "ROTATE" : kind === "delete" ? "DELETE" : kind === "random" ? "RANDOM" : "FIGHT";
+    text(label, x + w / 2, y + h / 2 + 1, kind === "random" ? 13 : 14, "center", kind === "fight" ? PAPER : INK);
   }
 
   function drawTray(l) {
     for (let i = 0; i < TRAY.length; i += 1) {
       const type = TRAY[i];
-      const row = Math.floor(i / 5);
-      const col = i % 5;
-      const x = l.pad + col * (l.traySize + l.trayGap);
+      const row = i < 4 ? 0 : 1;
+      const col = i < 4 ? i : i - 4;
+      const cols = row === 0 ? 4 : 3;
+      const rowW = cols * l.traySize + (cols - 1) * l.trayGap;
+      const x = Math.round((state.w - rowW) / 2 + col * (l.traySize + l.trayGap));
       const y = l.trayY + row * (l.traySize + l.trayGap);
       const active = state.selectedType === type && !state.selectedPartId;
       ctx.fillStyle = active ? INK : PAPER;
@@ -1071,8 +1158,9 @@
       ctx.lineWidth = 4;
       ctx.fillRect(x, y, l.traySize, l.traySize);
       ctx.strokeRect(x, y, l.traySize, l.traySize);
-      drawPart(type, x + l.traySize / 2, y + l.traySize / 2, l.traySize * 0.68, defaultRotation(type), {
+      drawPart(type, x + l.traySize / 2, y + l.traySize / 2, l.traySize * 0.78, defaultRotation(type), {
         inverse: active,
+        mode: "tray",
       });
       addHit("tray", x, y, l.traySize, l.traySize, { type });
     }
@@ -1094,11 +1182,11 @@
     ctx.translate(Math.round(sx), Math.round(sy));
     text("FIGHT", 18, 18, 20, "left");
     drawFightHp(18, 50, coreHp(b.player), false);
-    drawFightHp(state.w - 138, 50, coreHp(b.enemy), true);
+    drawFightHp(state.w - 106, 50, coreHp(b.enemy), true);
     drawEnemyMark(b.enemyName);
     drawGround();
-    drawBot(b.player, b.cell);
-    drawBot(b.enemy, b.cell);
+    drawBot(b.player, b.cell, b);
+    drawBot(b.enemy, b.cell, b);
     drawParticles(b);
     ctx.restore();
     if (b.flash > 0) {
@@ -1116,11 +1204,11 @@
   function drawFightHp(x, y, hp, reverse) {
     ctx.strokeStyle = INK;
     ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, 120, 13);
-    const w = clamp(hp / PARTS.core.hp, 0, 1) * 114;
+    ctx.strokeRect(x, y, 88, 12);
+    const w = clamp(hp / PARTS.core.hp, 0, 1) * 82;
     ctx.fillStyle = INK;
-    if (reverse) ctx.fillRect(x + 117 - w, y + 3, w, 7);
-    else ctx.fillRect(x + 3, y + 3, w, 7);
+    if (reverse) ctx.fillRect(x + 85 - w, y + 3, w, 6);
+    else ctx.fillRect(x + 3, y + 3, w, 6);
   }
 
   function drawEnemyMark(name) {
@@ -1140,18 +1228,60 @@
     for (let x = 0; x < state.w; x += 34) ctx.fillRect(x, g + 18 + ((x / 34) % 2) * 3, 16, 3);
   }
 
-  function drawBot(bot, cell) {
+  function drawBot(bot, cell, battle) {
     const parts = bot.parts.filter((p) => p.alive).sort((a, b) => a.y - b.y);
+    drawBattleConnections(bot, cell);
     for (const p of parts) {
       const w = partWorld(bot, p, cell);
       const rot = bot.facing === 1 ? p.rotation : MIRROR_ROT[p.rotation];
-      const extra = (p.swing ? Math.sin((p.swing / 0.28) * Math.PI) * bot.facing * 0.75 : 0) +
+      const extra = (p.swing ? Math.sin((p.swing / 0.32) * Math.PI) * bot.facing * 0.82 : 0) +
         (p.bite ? Math.sin((p.bite / 0.18) * Math.PI) * bot.facing * 0.24 : 0);
-      drawPart(p.type, w.x, w.y, cell * (p.type === "core" ? 0.98 : 0.92), rot, {
+      if (p.type === "hammer" && p.swing) drawHammerTrail(w.x, w.y, cell, rot, bot.facing, p.swing);
+      drawPart(p.type, w.x, w.y, cell * (p.type === "core" ? 1.22 : 1.04), rot, {
         bodyAngle: bot.angle + extra,
         flash: p.flash || (p.type === "core" ? bot.coreFlash : 0),
+        time: battle.t,
+        mode: "fight",
+        hpRatio: p.maxHp ? p.hp / p.maxHp : 1,
       });
     }
+  }
+
+  function drawBattleConnections(bot, cell) {
+    ctx.save();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = Math.max(6, cell * 0.13);
+    for (const p of bot.parts) {
+      if (!p.alive) continue;
+      for (const d of [{ x: 1, y: 0 }, { x: 0, y: 1 }]) {
+        const q = bot.parts.find((part) => part.alive && part.x === p.x + d.x && part.y === p.y + d.y);
+        if (!q) continue;
+        const a = partWorld(bot, p, cell);
+        const b = partWorld(bot, q, cell);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.fillStyle = PAPER;
+        ctx.fillRect((a.x + b.x) / 2 - 3, (a.y + b.y) / 2 - 3, 6, 6);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawHammerTrail(x, y, cell, rot, facing, swing) {
+    const progress = 1 - swing / 0.32;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(((rot - 1) * Math.PI) / 2);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.arc(cell * 0.1 * facing, 0, cell * 0.68, -0.8 + progress * 0.45, 0.55 + progress * 0.45);
+    ctx.stroke();
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   function drawParticles(battle) {
@@ -1220,11 +1350,11 @@
     const flash = opt.flash || 0;
     ctx.save();
     ctx.translate(Math.round(x), Math.round(y));
-    ctx.rotate((rotation * Math.PI) / 2 + (opt.bodyAngle || 0));
+    ctx.rotate((type === "core" ? 0 : ((rotation - 1) * Math.PI) / 2) + (opt.bodyAngle || 0));
     ctx.strokeStyle = flash ? PAPER : ink;
     ctx.fillStyle = paper;
-    ctx.lineWidth = Math.max(2, Math.round(size / 9));
-    if (type === "core") drawCore(size, ink, paper, flash);
+    ctx.lineWidth = Math.max(3, Math.round(size / (opt.mode === "tray" ? 9 : 8)));
+    if (type === "core") drawCore(size, ink, paper, flash, opt.hpRatio ?? 1);
     else if (type === "leg") drawLeg(size, ink);
     else if (type === "wheel") drawWheel(size, ink, paper);
     else if (type === "spike") drawSpike(size, ink, paper);
@@ -1238,11 +1368,11 @@
     ctx.restore();
   }
 
-  function drawCore(s, ink, paper, flash) {
+  function drawCore(s, ink, paper, flash, hpRatio = 1) {
     ctx.fillStyle = flash ? ink : paper;
     ctx.strokeStyle = ink;
     ctx.beginPath();
-    ctx.ellipse(0, s * 0.04, s * 0.32, s * 0.44, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, s * 0.04, s * 0.38, s * 0.48, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.strokeStyle = flash ? paper : ink;
@@ -1253,34 +1383,54 @@
     ctx.lineTo(-s * 0.02, s * 0.04);
     ctx.lineTo(s * 0.12, s * 0.2);
     ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.16, s * 0.08);
+    ctx.lineTo(-s * 0.02, s * 0.15);
+    ctx.lineTo(-s * 0.12, s * 0.29);
+    ctx.stroke();
+    if (hpRatio < 0.7) {
+      ctx.beginPath();
+      ctx.moveTo(s * 0.14, -s * 0.23);
+      ctx.lineTo(s * 0.03, -s * 0.02);
+      ctx.lineTo(s * 0.19, s * 0.08);
+      ctx.stroke();
+    }
+    if (hpRatio < 0.35) {
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.22, -s * 0.12);
+      ctx.lineTo(-s * 0.02, -s * 0.04);
+      ctx.lineTo(-s * 0.2, s * 0.08);
+      ctx.stroke();
+    }
     ctx.fillStyle = flash ? paper : ink;
-    ctx.fillRect(-s * 0.06, -s * 0.04, s * 0.12, s * 0.12);
+    ctx.fillRect(-s * 0.07, -s * 0.03, s * 0.14, s * 0.14);
   }
 
   function drawLeg(s, ink) {
     ctx.fillStyle = ink;
-    const w = s * 0.16;
-    ctx.fillRect(-s * 0.23, -s * 0.32, w, s * 0.46);
-    ctx.fillRect(s * 0.05, -s * 0.32, w, s * 0.46);
-    ctx.fillRect(-s * 0.29, s * 0.1, s * 0.32, s * 0.12);
-    ctx.fillRect(s * 0.01, s * 0.1, s * 0.32, s * 0.12);
-    ctx.fillRect(-s * 0.22, s * 0.22, s * 0.1, s * 0.1);
-    ctx.fillRect(s * 0.08, s * 0.22, s * 0.1, s * 0.1);
+    ctx.fillRect(-s * 0.34, -s * 0.24, s * 0.5, s * 0.14);
+    ctx.fillRect(-s * 0.34, s * 0.1, s * 0.5, s * 0.14);
+    ctx.fillRect(s * 0.02, -s * 0.34, s * 0.16, s * 0.28);
+    ctx.fillRect(s * 0.02, s * 0.06, s * 0.16, s * 0.28);
+    ctx.fillRect(s * 0.1, -s * 0.4, s * 0.34, s * 0.12);
+    ctx.fillRect(s * 0.1, s * 0.28, s * 0.34, s * 0.12);
+    ctx.fillRect(s * 0.36, -s * 0.3, s * 0.12, s * 0.08);
+    ctx.fillRect(s * 0.36, s * 0.22, s * 0.12, s * 0.08);
   }
 
   function drawWheel(s, ink, paper) {
     ctx.fillStyle = paper;
     ctx.strokeStyle = ink;
     ctx.beginPath();
-    ctx.arc(0, 0, s * 0.34, 0, Math.PI * 2);
+    ctx.arc(0, 0, s * 0.43, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(0, 0, s * 0.16, 0, Math.PI * 2);
+    ctx.arc(0, 0, s * 0.21, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = ink;
-    for (let a = 0; a < Math.PI * 2; a += Math.PI / 2) {
-      ctx.fillRect(Math.cos(a) * s * 0.23 - 2, Math.sin(a) * s * 0.23 - 2, 4, 4);
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 3) {
+      ctx.fillRect(Math.cos(a) * s * 0.31 - 2, Math.sin(a) * s * 0.31 - 2, 4, 4);
     }
   }
 
@@ -1288,56 +1438,56 @@
     ctx.fillStyle = paper;
     ctx.strokeStyle = ink;
     ctx.beginPath();
-    ctx.moveTo(s * 0.43, 0);
-    ctx.lineTo(-s * 0.25, -s * 0.34);
-    ctx.lineTo(-s * 0.15, -s * 0.06);
+    ctx.moveTo(s * 0.58, 0);
+    ctx.lineTo(-s * 0.26, -s * 0.38);
+    ctx.lineTo(-s * 0.12, -s * 0.08);
     ctx.lineTo(-s * 0.34, s * 0.06);
-    ctx.lineTo(-s * 0.18, s * 0.32);
+    ctx.lineTo(-s * 0.16, s * 0.36);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = ink;
-    ctx.fillRect(-s * 0.25, -s * 0.08, s * 0.25, s * 0.16);
+    ctx.fillRect(-s * 0.28, -s * 0.09, s * 0.33, s * 0.18);
   }
 
   function drawShield(s, ink, paper) {
     ctx.fillStyle = paper;
     ctx.strokeStyle = ink;
     ctx.beginPath();
-    ctx.moveTo(s * 0.28, -s * 0.36);
-    ctx.lineTo(-s * 0.28, -s * 0.28);
-    ctx.lineTo(-s * 0.28, s * 0.28);
-    ctx.lineTo(s * 0.28, s * 0.36);
+    ctx.moveTo(s * 0.38, -s * 0.44);
+    ctx.lineTo(-s * 0.3, -s * 0.32);
+    ctx.lineTo(-s * 0.3, s * 0.32);
+    ctx.lineTo(s * 0.38, s * 0.44);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = ink;
-    ctx.fillRect(s * 0.21, -s * 0.35, s * 0.1, s * 0.7);
-    ctx.fillRect(-s * 0.08, -s * 0.22, s * 0.08, s * 0.44);
+    ctx.fillRect(s * 0.3, -s * 0.42, s * 0.12, s * 0.84);
+    ctx.fillRect(-s * 0.08, -s * 0.25, s * 0.09, s * 0.5);
   }
 
   function drawHammer(s, ink) {
     ctx.fillStyle = ink;
-    ctx.fillRect(-s * 0.34, -s * 0.05, s * 0.48, s * 0.1);
-    ctx.fillRect(s * 0.06, -s * 0.32, s * 0.18, s * 0.64);
+    ctx.fillRect(-s * 0.4, -s * 0.05, s * 0.58, s * 0.1);
+    ctx.fillRect(s * 0.08, -s * 0.38, s * 0.2, s * 0.76);
     ctx.beginPath();
-    ctx.arc(s * 0.22, -s * 0.29, s * 0.09, 0, Math.PI * 2);
-    ctx.arc(s * 0.22, s * 0.29, s * 0.09, 0, Math.PI * 2);
+    ctx.arc(s * 0.28, -s * 0.36, s * 0.1, 0, Math.PI * 2);
+    ctx.arc(s * 0.28, s * 0.36, s * 0.1, 0, Math.PI * 2);
     ctx.fill();
   }
 
   function drawWeight(s, ink) {
     ctx.fillStyle = ink;
     ctx.beginPath();
-    ctx.moveTo(-s * 0.36, s * 0.22);
-    ctx.lineTo(-s * 0.25, -s * 0.28);
-    ctx.lineTo(s * 0.2, -s * 0.36);
-    ctx.lineTo(s * 0.38, s * 0.12);
-    ctx.lineTo(s * 0.1, s * 0.34);
+    ctx.moveTo(-s * 0.44, s * 0.26);
+    ctx.lineTo(-s * 0.3, -s * 0.34);
+    ctx.lineTo(s * 0.24, -s * 0.42);
+    ctx.lineTo(s * 0.44, s * 0.14);
+    ctx.lineTo(s * 0.12, s * 0.42);
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = PAPER;
-    ctx.fillRect(-s * 0.1, -s * 0.16, s * 0.1, s * 0.08);
+    ctx.fillRect(-s * 0.11, -s * 0.18, s * 0.12, s * 0.09);
   }
 
   function drawWing(s, ink) {
@@ -1373,18 +1523,21 @@
     ctx.fillStyle = paper;
     ctx.strokeStyle = ink;
     ctx.beginPath();
-    ctx.ellipse(0, s * 0.03, s * 0.31, s * 0.42, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, s * 0.03, s * 0.36, s * 0.46, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(-s * 0.08, -s * 0.28);
-    ctx.lineTo(s * 0.08, -s * 0.11);
-    ctx.lineTo(-s * 0.03, s * 0.02);
-    ctx.lineTo(s * 0.13, s * 0.18);
+    ctx.moveTo(-s * 0.12, -s * 0.3);
+    ctx.lineTo(s * 0.09, -s * 0.12);
+    ctx.lineTo(-s * 0.05, s * 0.02);
+    ctx.lineTo(s * 0.15, s * 0.2);
+    ctx.moveTo(-s * 0.18, s * 0.08);
+    ctx.lineTo(0, s * 0.18);
+    ctx.lineTo(-s * 0.09, s * 0.32);
     ctx.stroke();
     ctx.fillStyle = ink;
-    ctx.fillRect(s * 0.08, -s * 0.38, s * 0.07, s * 0.11);
-    ctx.fillRect(s * 0.15, -s * 0.43, s * 0.12, s * 0.05);
+    ctx.fillRect(s * 0.08, -s * 0.42, s * 0.08, s * 0.13);
+    ctx.fillRect(s * 0.16, -s * 0.48, s * 0.15, s * 0.06);
   }
 
   function drawJaw(s, ink, paper) {
