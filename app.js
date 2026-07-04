@@ -4,18 +4,24 @@
   const canvas = document.querySelector("#game");
   const ctx = canvas.getContext("2d");
 
-  const INK = "#111";
-  const PAPER = "#f4f5f6";
-  const PALE = "#ddd";
+  const INK = "#17202a";
+  const PAPER = "#f2f5f8";
+  const PANEL = "#ffffff";
+  const PALE = "#d8e0e8";
+  const GRID_LINE = "#dce5ed";
+  const ACCENT = "#4c6fff";
+  const SIGNAL = "#7ee787";
+  const DANGER = "#ef596f";
   const GRID = 7;
   const CORE = 3;
-  const MAX_BLOCKS = 13;
+  const MAX_BLOCKS = 16;
+  const MAX_NODES = 50;
   const MAX_LOGIC = 12;
-  const MAX_WIRES = 40;
+  const MAX_WIRES = 100;
   const TICK = 1 / 30;
   const MAX_FIGHT = 45;
-  const PREFIX = "CBA2:";
-  const OLD_PREFIX = "CBA1:";
+  const PREFIX = "CBA3:";
+  const OLD_PREFIXES = ["CBA1:", "CBA2:"];
   const DIRS = [
     { x: 0, y: -1 },
     { x: 1, y: 0 },
@@ -33,11 +39,12 @@
   };
   const PALETTE = ["wheel", "gun", "radar", "armor", "battery"];
   const PART_INFO = {
-    wheel: { name: "Wheel", role: "MOVE", desc: "Speed and turning.", stats: ["SPD", "TURN"] },
-    gun: { name: "Gun", role: "SHOOT", desc: "Fires bullets.", stats: ["FIRE"] },
-    radar: { name: "Radar", role: "SEE", desc: "Finds enemies.", stats: ["RADAR"] },
-    armor: { name: "Armor", role: "BLOCK", desc: "Protects blocks.", stats: ["ARMOR"] },
-    battery: { name: "Battery", role: "POWER", desc: "More energy.", stats: ["ENERGY"] },
+    core: { name: "Core", role: "HEART", desc: "Protect this.", stats: ["HP"], color: "#f4b43c", dark: "#c46d1b" },
+    wheel: { name: "Wheel", role: "MOVE", desc: "Speed and turning.", stats: ["SPD", "TURN"], color: "#4c6fff", dark: "#263b83" },
+    gun: { name: "Gun", role: "SHOOT", desc: "Fires bullets.", stats: ["FIRE"], color: "#ef596f", dark: "#8d2330" },
+    radar: { name: "Radar", role: "SEE", desc: "Finds enemies.", stats: ["RADAR"], color: "#48c6d9", dark: "#246a89" },
+    armor: { name: "Armor", role: "BLOCK", desc: "Protects blocks.", stats: ["ARMOR"], color: "#7d91a8", dark: "#3c4b5e" },
+    battery: { name: "Battery", role: "POWER", desc: "More energy.", stats: ["ENERGY"], color: "#55c878", dark: "#28783f" },
   };
 
   const SENSORS = [
@@ -109,9 +116,9 @@
   const ACTION_GROUPS = ["RADAR", "AIM", "SHOOT", "MOVE"];
 
   const LS = {
-    design: "circuit-bot-arena.v2.design",
-    opponent: "circuit-bot-arena.v2.opponent",
-    enemyIndex: "circuit-bot-arena.v2.enemyIndex",
+    design: "circuit-bot-arena.v3.program-ui.design",
+    opponent: "circuit-bot-arena.v3.program-ui.opponent",
+    enemyIndex: "circuit-bot-arena.v3.program-ui.enemyIndex",
   };
 
   const state = {
@@ -125,10 +132,32 @@
     enemyIndex: 0,
     selectedBlockType: "wheel",
     selectedBlockId: null,
+    undoBlocks: null,
     wireFrom: null,
     selectedWireIndex: null,
     selectedLogicId: null,
     editingRuleId: null,
+    selectedNodeId: null,
+    selectedProgramWireId: null,
+    connectingPort: null,
+    libraryOpen: false,
+    libraryTab: "sensor",
+    pointer: {
+      down: false,
+      id: null,
+      mode: "",
+      startX: 0,
+      startY: 0,
+      lastX: 0,
+      lastY: 0,
+      worldX: 0,
+      worldY: 0,
+      moved: false,
+      pinchDist: 0,
+      pinchZoom: 1,
+      pinchCenter: null,
+    },
+    touches: new Map(),
     hits: [],
     battle: null,
     fightOpponent: null,
@@ -196,9 +225,130 @@
     return { from, to };
   }
 
+  function programNode(kind, type, x, y, id = uid(kind[0] || "n")) {
+    return { id, kind, type, x, y };
+  }
+
+  function programWire(fromNode, fromPort, toNode, toPort, id = uid("w")) {
+    return { id, fromNode, fromPort, toNode, toPort };
+  }
+
+  function defaultProgram() {
+    const nodes = [
+      programNode("sensor", "always", -220, -220, "s_always"),
+      programNode("sensor", "enemySeen", -220, -125, "s_seen"),
+      programNode("sensor", "enemyFar", -220, -30, "s_far"),
+      programNode("sensor", "enemyNear", -220, 65, "s_near"),
+      programNode("sensor", "gunReady", -220, 160, "s_ready"),
+      programNode("sensor", "gunAligned", -220, 255, "s_lock"),
+      programNode("sensor", "bulletIncoming", -220, 350, "s_bullet"),
+      programNode("sensor", "wallAhead", -220, 445, "s_wall"),
+      programNode("logic", "and", 10, 160, "l_seen_ready"),
+      programNode("logic", "and", 125, 255, "l_fire_lock"),
+      programNode("action", "radarSweep", 270, -220, "a_sweep"),
+      programNode("action", "aimAtEnemy", 270, -125, "a_aim"),
+      programNode("action", "moveForward", 270, -30, "a_forward"),
+      programNode("action", "moveBackward", 270, 65, "a_back"),
+      programNode("action", "fire", 270, 255, "a_fire"),
+      programNode("action", "orbitLeft", 270, 350, "a_orbit"),
+      programNode("action", "turnRight", 270, 445, "a_turn"),
+    ];
+    const wires = [
+      programWire("s_always", "out", "a_sweep", "in", "w_sweep"),
+      programWire("s_seen", "out", "a_aim", "in", "w_aim"),
+      programWire("s_far", "out", "a_forward", "in", "w_forward"),
+      programWire("s_near", "out", "a_back", "in", "w_back"),
+      programWire("s_seen", "out", "l_seen_ready", "in0", "w_seen_and"),
+      programWire("s_ready", "out", "l_seen_ready", "in1", "w_ready_and"),
+      programWire("l_seen_ready", "out", "l_fire_lock", "in0", "w_fire_a"),
+      programWire("s_lock", "out", "l_fire_lock", "in1", "w_fire_b"),
+      programWire("l_fire_lock", "out", "a_fire", "in", "w_fire"),
+      programWire("s_bullet", "out", "a_orbit", "in", "w_dodge"),
+      programWire("s_wall", "out", "a_turn", "in", "w_wall"),
+    ];
+    return { nodes, wires, view: { x: -20, y: -110, zoom: 0.54 } };
+  }
+
+  function normalizeProgram(raw) {
+    const src = raw && Array.isArray(raw.nodes) ? raw : defaultProgram();
+    const nodes = [];
+    const ids = new Set();
+    for (const n of src.nodes || []) {
+      if (nodes.length >= MAX_NODES) break;
+      const kind = String(n.kind || "");
+      const type = String(n.type || "");
+      if (!nodeTypeValid(kind, type)) continue;
+      const id = String(n.id || uid(kind[0] || "n")).replace(/[^\w-]/g, "").slice(0, 32) || uid("n");
+      if (ids.has(id)) continue;
+      ids.add(id);
+      nodes.push(programNode(kind, type, clamp(Number(n.x) || 0, -3000, 3000), clamp(Number(n.y) || 0, -3000, 3000), id));
+    }
+    const wires = [];
+    for (const w of src.wires || []) {
+      if (wires.length >= MAX_WIRES) break;
+      const wireCandidate = {
+        id: String(w.id || uid("w")).replace(/[^\w-]/g, "").slice(0, 32) || uid("w"),
+        fromNode: String(w.fromNode || ""),
+        fromPort: String(w.fromPort || "out"),
+        toNode: String(w.toNode || ""),
+        toPort: String(w.toPort || "in"),
+      };
+      if (!canConnectProgramWire(wireCandidate, nodes, wires)) continue;
+      wires.push(wireCandidate);
+    }
+    const view = {
+      x: clamp(Number(src.view?.x) || 0, -4000, 4000),
+      y: clamp(Number(src.view?.y) || 0, -4000, 4000),
+      zoom: clamp(Number(src.view?.zoom) || 0.82, 0.4, 2.5),
+    };
+    return { nodes: nodes.length ? nodes : defaultProgram().nodes, wires, view };
+  }
+
+  function nodeTypeValid(kind, type) {
+    if (kind === "sensor") return !!SENSOR_META[type];
+    if (kind === "action") return !!ACTION_META[type];
+    if (kind === "logic") return !!LOGIC_TYPES[type];
+    return false;
+  }
+
+  function canConnectProgramWire(w, nodes, existing = []) {
+    const from = nodes.find((n) => n.id === w.fromNode);
+    const to = nodes.find((n) => n.id === w.toNode);
+    if (!from || !to || from.id === to.id) return false;
+    if (from.kind === "action" || to.kind === "sensor") return false;
+    if (w.fromPort !== "out") return false;
+    const ports = programInputPorts(to);
+    if (!ports.includes(w.toPort)) return false;
+    if (existing.some((x) => x.fromNode === w.fromNode && x.fromPort === w.fromPort && x.toNode === w.toNode && x.toPort === w.toPort)) return false;
+    if (wouldCreateProgramCycle(w.fromNode, w.toNode, nodes, existing)) return false;
+    return true;
+  }
+
+  function wouldCreateProgramCycle(fromNode, toNode, nodes, wires) {
+    const seen = new Set([fromNode]);
+    const stack = [toNode];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) return true;
+      seen.add(id);
+      for (const w of wires) if (w.fromNode === id) stack.push(w.toNode);
+    }
+    return false;
+  }
+
+  function programInputPorts(node) {
+    if (!node) return [];
+    if (node.kind === "action") return ["in"];
+    if (node.kind === "logic") {
+      const count = LOGIC_TYPES[node.type]?.inputs || 0;
+      return Array.from({ length: count }, (_, i) => `in${i}`);
+    }
+    return [];
+  }
+
   function defaultDesign() {
     return normalizeDesign({
-      version: 1,
+      version: 3,
       name: "My Bot",
       blocks: [
         block("core", CORE, CORE, 0, "core"),
@@ -209,7 +359,7 @@
         block("wheel", CORE + 1, CORE + 1, 0),
         block("battery", CORE, CORE + 1, 0),
       ],
-      brain: defaultBrain(),
+      program: defaultProgram(),
     });
   }
 
@@ -287,15 +437,17 @@
     core.id = "core";
 
     const connected = pruneDisconnected(blocks).slice(0, MAX_BLOCKS);
+    const program = normalizeProgram(raw?.program || raw?.schematicV3 || null);
     const brain = normalizeBrain(raw?.brain);
-    const schematicSource = raw?.brain?.rules ? schematicFromBrain(brain) : (raw?.schematic || schematicFromBrain(brain));
+    const schematicSource = raw?.schematic || schematicFromBrain(brain);
     const schematic = normalizeSchematic(schematicSource);
     return {
-      version: 2,
+      version: 3,
       name: String(raw?.name || "Bot").slice(0, 24),
       blocks: connected,
       schematic,
       brain,
+      program,
     };
   }
 
@@ -375,7 +527,17 @@
     if (x < 0 || y < 0 || x >= GRID || y >= GRID) return false;
     if (state.design.blocks.some((b) => b.x === x && b.y === y)) return false;
     if (state.design.blocks.length >= MAX_BLOCKS) return false;
+    if (!placementNatural(state.selectedBlockType, x, y)) return false;
     return DIRS.some((d) => state.design.blocks.some((b) => b.x === x + d.x && b.y === y + d.y));
+  }
+
+  function placementNatural(type, x, y) {
+    if (type === "wheel") return y >= CORE;
+    if (type === "gun") return x === 0 || y === 0 || x === GRID - 1 || y === GRID - 1 || Math.abs(x - CORE) + Math.abs(y - CORE) >= 2;
+    if (type === "radar") return y <= CORE || x === 0 || x === GRID - 1;
+    if (type === "armor") return Math.abs(x - CORE) + Math.abs(y - CORE) >= 1;
+    if (type === "battery") return Math.abs(x - CORE) + Math.abs(y - CORE) <= 3;
+    return true;
   }
 
   function saveDesign() {
@@ -522,14 +684,48 @@
     const rect = canvas.getBoundingClientRect();
     const x = (event.clientX - rect.left) * (state.w / rect.width);
     const y = (event.clientY - rect.top) * (state.h / rect.height);
-    handlePointer(x, y);
+    if (state.mode === "program") programPointerDown(event, x, y);
+    else handlePointer(x, y);
     event.preventDefault();
   });
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (state.mode !== "program") return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (state.w / rect.width);
+    const y = (event.clientY - rect.top) * (state.h / rect.height);
+    programPointerMove(event, x, y);
+    event.preventDefault();
+  });
+
+  canvas.addEventListener("pointerup", (event) => {
+    if (state.mode !== "program") return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (state.w / rect.width);
+    const y = (event.clientY - rect.top) * (state.h / rect.height);
+    programPointerUp(event, x, y);
+    event.preventDefault();
+  });
+
+  canvas.addEventListener("pointercancel", (event) => {
+    state.touches.delete(event.pointerId);
+    state.pointer.down = false;
+  });
+
+  canvas.addEventListener("wheel", (event) => {
+    if (state.mode !== "program") return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (state.w / rect.width);
+    const y = (event.clientY - rect.top) * (state.h / rect.height);
+    zoomProgramAt(x, y, event.deltaY < 0 ? 1.12 : 0.88);
+    saveDesign();
+    event.preventDefault();
+  }, { passive: false });
 
   window.addEventListener("keydown", (event) => {
     if (event.key === "Backspace" || event.key === "Delete") {
       if (state.mode === "build") deleteSelectedBlock();
-      if (state.mode === "brain") deleteEditingRule();
+      if (state.mode === "program") deleteSelectedProgram();
       event.preventDefault();
     } else if (event.key.toLowerCase() === "r" && state.mode === "build") {
       rotateSelectedBlock();
@@ -543,8 +739,8 @@
       setMode(hit.mode);
     } else if (state.mode === "build") {
       handleBuildHit(hit);
-    } else if (state.mode === "brain") {
-      handleBrainHit(hit);
+    } else if (state.mode === "program") {
+      handleProgramHit(hit);
     } else if (state.mode === "fight") {
       handleFightHit(hit);
     } else if (state.mode === "share") {
@@ -571,7 +767,7 @@
     } else if (hit.kind === "delete") deleteSelectedBlock();
     else if (hit.kind === "rotate") rotateSelectedBlock();
     else if (hit.kind === "random") randomDesign();
-    else if (hit.kind === "brain") setMode("brain");
+    else if (hit.kind === "program") setMode("program");
     else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
   }
 
@@ -584,6 +780,213 @@
     else if (hit.kind === "doneRule") state.editingRuleId = null;
     else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
     else if (hit.kind === "build") setMode("build");
+  }
+
+  function handleProgramHit(hit) {
+    if (hit.kind === "programTool") {
+      if (hit.tool === "library") state.libraryOpen = !state.libraryOpen;
+      else if (hit.tool === "fit") fitProgramView();
+      else if (hit.tool === "reset") {
+        state.design.program.view = { x: 0, y: 0, zoom: 0.72 };
+        saveDesign();
+      } else if (hit.tool === "delete") deleteSelectedProgram();
+    } else if (hit.kind === "libraryTab") {
+      state.libraryTab = hit.tab;
+    } else if (hit.kind === "libraryNode") {
+      addProgramNode(hit.kindType, hit.type);
+    } else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+    else if (hit.kind === "build") setMode("build");
+  }
+
+  function programPointerDown(event, x, y) {
+    state.touches.set(event.pointerId, { x, y });
+    state.pointer.down = true;
+    state.pointer.id = event.pointerId;
+    state.pointer.startX = state.pointer.lastX = x;
+    state.pointer.startY = state.pointer.lastY = y;
+    state.pointer.lastScreenX = x;
+    state.pointer.lastScreenY = y;
+    state.pointer.moved = false;
+    const hit = [...state.hits].reverse().find((h) => x >= h.x && y >= h.y && x <= h.x + h.w && y <= h.y + h.h);
+    if (hit?.kind === "tab") {
+      setMode(hit.mode);
+      return;
+    }
+    if (state.touches.size >= 2) {
+      beginProgramPinch();
+      return;
+    }
+    if (hit && ["programTool", "libraryTab", "libraryNode", "fight", "build"].includes(hit.kind)) {
+      handleProgramHit(hit);
+      return;
+    }
+    if (hit?.kind === "programPort") {
+      handleProgramPortTap(hit);
+      return;
+    }
+    if (hit?.kind === "programNode") {
+      const n = state.design.program.nodes.find((node) => node.id === hit.nodeId);
+      if (!n) return;
+      const w = screenToWorld(x, y);
+      state.selectedNodeId = n.id;
+      state.selectedProgramWireId = null;
+      state.pointer.mode = "node";
+      state.pointer.worldX = w.x;
+      state.pointer.worldY = w.y;
+      state.pointer.nodeStart = { x: n.x, y: n.y };
+      return;
+    }
+    if (hit?.kind === "programWire") {
+      state.selectedProgramWireId = hit.wireId;
+      state.selectedNodeId = null;
+      state.connectingPort = null;
+      return;
+    }
+    state.pointer.mode = "pan";
+    state.connectingPort = null;
+  }
+
+  function programPointerMove(event, x, y) {
+    if (state.touches.has(event.pointerId)) state.touches.set(event.pointerId, { x, y });
+    state.pointer.lastX = x;
+    state.pointer.lastY = y;
+    const moved = Math.hypot(x - state.pointer.startX, y - state.pointer.startY) > 4;
+    state.pointer.moved = state.pointer.moved || moved;
+    if (state.touches.size >= 2 && state.pointer.mode === "pinch") {
+      updateProgramPinch();
+      return;
+    }
+    if (!state.pointer.down || event.pointerId !== state.pointer.id) return;
+    if (state.pointer.mode === "node") {
+      const n = state.design.program.nodes.find((node) => node.id === state.selectedNodeId);
+      if (!n) return;
+      const w = screenToWorld(x, y);
+      n.x = state.pointer.nodeStart.x + (w.x - state.pointer.worldX);
+      n.y = state.pointer.nodeStart.y + (w.y - state.pointer.worldY);
+    } else if (state.pointer.mode === "pan") {
+      const v = state.design.program.view;
+      v.x += (x - state.pointer.lastScreenX) / v.zoom;
+      v.y += (y - state.pointer.lastScreenY) / v.zoom;
+    }
+    state.pointer.lastScreenX = x;
+    state.pointer.lastScreenY = y;
+  }
+
+  function programPointerUp(event, x, y) {
+    if (state.connectingPort) {
+      const hit = [...state.hits].reverse().find((h) => x >= h.x && y >= h.y && x <= h.x + h.w && y <= h.y + h.h);
+      if (hit?.kind === "programPort" && hit.dir === "in") handleProgramPortTap(hit);
+    }
+    state.touches.delete(event.pointerId);
+    if (state.pointer.mode === "node" || state.pointer.mode === "pan" || state.pointer.mode === "pinch") saveDesign();
+    if (state.touches.size >= 2) beginProgramPinch();
+    else {
+      state.pointer.down = false;
+      state.pointer.mode = "";
+    }
+  }
+
+  function beginProgramPinch() {
+    const pts = [...state.touches.values()];
+    if (pts.length < 2) return;
+    const a = pts[0];
+    const b = pts[1];
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    state.pointer.mode = "pinch";
+    state.pointer.pinchDist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    state.pointer.pinchZoom = state.design.program.view.zoom;
+    state.pointer.pinchCenter = { screenX: cx, screenY: cy, world: screenToWorld(cx, cy) };
+  }
+
+  function updateProgramPinch() {
+    const pts = [...state.touches.values()];
+    if (pts.length < 2 || !state.pointer.pinchCenter) return;
+    const a = pts[0];
+    const b = pts[1];
+    const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    const z = clamp(state.pointer.pinchZoom * (dist / state.pointer.pinchDist), 0.4, 2.5);
+    setProgramZoomAt(state.pointer.pinchCenter.screenX, state.pointer.pinchCenter.screenY, z, state.pointer.pinchCenter.world);
+  }
+
+  function zoomProgramAt(x, y, factor) {
+    const before = screenToWorld(x, y);
+    const z = clamp(state.design.program.view.zoom * factor, 0.4, 2.5);
+    setProgramZoomAt(x, y, z, before);
+  }
+
+  function setProgramZoomAt(x, y, z, worldBefore) {
+    const v = state.design.program.view;
+    const area = programArea();
+    v.zoom = z;
+    v.x = (x - area.x - area.w / 2) / z - worldBefore.x;
+    v.y = (y - area.y - area.h / 2) / z - worldBefore.y;
+  }
+
+  function handleProgramPortTap(hit) {
+    if (hit.dir === "out") {
+      state.connectingPort = { nodeId: hit.nodeId, port: hit.port };
+      state.selectedNodeId = null;
+      state.selectedProgramWireId = null;
+      return;
+    }
+    if (!state.connectingPort) return;
+    const candidate = programWire(state.connectingPort.nodeId, state.connectingPort.port, hit.nodeId, hit.port);
+    if (canConnectProgramWire(candidate, state.design.program.nodes, state.design.program.wires)) {
+      state.design.program.wires.push(candidate);
+      saveDesign();
+    } else {
+      toast("BAD LINK");
+    }
+    state.connectingPort = null;
+  }
+
+  function addProgramNode(kind, type) {
+    if (state.design.program.nodes.length >= MAX_NODES) {
+      toast("MAX NODES");
+      return;
+    }
+    const center = screenToWorld(state.w / 2, state.h / 2);
+    const n = programNode(kind, type, center.x, center.y);
+    state.design.program.nodes.push(n);
+    state.selectedNodeId = n.id;
+    state.selectedProgramWireId = null;
+    state.libraryOpen = false;
+    saveDesign();
+  }
+
+  function deleteSelectedProgram() {
+    if (state.selectedProgramWireId) {
+      state.design.program.wires = state.design.program.wires.filter((w) => w.id !== state.selectedProgramWireId);
+      state.selectedProgramWireId = null;
+      saveDesign();
+      return;
+    }
+    if (state.selectedNodeId) {
+      state.design.program.nodes = state.design.program.nodes.filter((n) => n.id !== state.selectedNodeId);
+      state.design.program.wires = state.design.program.wires.filter((w) => w.fromNode !== state.selectedNodeId && w.toNode !== state.selectedNodeId);
+      state.selectedNodeId = null;
+      saveDesign();
+    }
+  }
+
+  function fitProgramView() {
+    const nodes = state.design.program.nodes;
+    if (!nodes.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      const s = programNodeSize(n);
+      minX = Math.min(minX, n.x - s.w / 2);
+      minY = Math.min(minY, n.y - s.h / 2);
+      maxX = Math.max(maxX, n.x + s.w / 2);
+      maxY = Math.max(maxY, n.y + s.h / 2);
+    }
+    const area = programArea();
+    const z = clamp(Math.min(area.w / (maxX - minX + 180), area.h / (maxY - minY + 180)), 0.4, 2.5);
+    state.design.program.view.zoom = z;
+    state.design.program.view.x = -((minX + maxX) / 2);
+    state.design.program.view.y = -((minY + maxY) / 2);
+    saveDesign();
   }
 
   function handleWireHit(hit) {
@@ -614,7 +1017,7 @@
       state.fightOpponent = state.enemies[state.enemyIndex];
       startFight(state.fightOpponent);
     } else if (hit.kind === "build") setMode("build");
-    else if (hit.kind === "brain") setMode("brain");
+    else if (hit.kind === "program") setMode("program");
     else if (hit.kind === "share") setMode("share");
   }
 
@@ -669,7 +1072,7 @@
       const type = PALETTE[Math.floor(rand01(guard * 13) * PALETTE.length)];
       blocks.push(block(type, x, y, defaultRot(type)));
     }
-    state.design = normalizeDesign({ version: 2, name: "Random Bot", blocks, brain: defaultBrain() });
+    state.design = normalizeDesign({ version: 3, name: "Random Bot", blocks, program: defaultProgram() });
     state.selectedBlockId = null;
     saveDesign();
   }
@@ -818,6 +1221,8 @@
       sensors: {},
       prevSensors: {},
       actions: {},
+      programValues: {},
+      activeProgramNodes: [],
       ruleStates: {},
       activeRules: [],
       logicMemory: {},
@@ -985,6 +1390,10 @@
   }
 
   function evaluateSchematic(bot, battle, dt) {
+    if (bot.design.program?.nodes?.length) {
+      evaluateProgram(bot, battle, dt);
+      return;
+    }
     const s = bot.design.schematic;
     const values = {};
     for (const [id] of SENSORS) values[`sensor.${id}`] = !!bot.sensors[id];
@@ -1039,6 +1448,52 @@
     }
     bot.actions = {};
     for (const [id] of ACTIONS) bot.actions[id] = inputValue(`action.${id}`);
+    if (bot.side === "P") state.lastSignals = values;
+  }
+
+  function evaluateProgram(bot, battle, dt) {
+    const program = bot.design.program;
+    const nodes = [...program.nodes].sort((a, b) => a.x - b.x || a.y - b.y);
+    const values = {};
+    const inputConnected = (node, port) => program.wires.some((w) => w.toNode === node.id && w.toPort === port);
+    const inputValue = (node, port) => program.wires.some((w) => w.toNode === node.id && w.toPort === port && values[w.fromNode]);
+    for (const node of nodes) {
+      const available = programNodeAvailable(node, bot.design).ok;
+      let value = false;
+      if (node.kind === "sensor") {
+        value = available && !!bot.sensors[node.type];
+      } else if (node.kind === "logic") {
+        if (node.type === "and") {
+          const ports = programInputPorts(node);
+          value = ports.length > 0 && ports.every((p) => inputConnected(node, p) && inputValue(node, p));
+        } else if (node.type === "or") {
+          value = programInputPorts(node).some((p) => inputConnected(node, p) && inputValue(node, p));
+        } else if (node.type === "not") {
+          value = inputConnected(node, "in0") && !inputValue(node, "in0");
+        } else if (node.type === "timer") {
+          value = (battle.t % 1.05) < 0.18;
+        } else if (node.type === "random") {
+          const mem = bot.logicMemory[node.id] || { next: 0, value: false };
+          if (battle.t >= mem.next) {
+            mem.value = bot.rand() < 0.38;
+            mem.next = battle.t + 0.45;
+            bot.logicMemory[node.id] = mem;
+          }
+          value = mem.value;
+        }
+      } else if (node.kind === "action") {
+        value = available && inputConnected(node, "in") && inputValue(node, "in");
+      }
+      values[node.id] = !!value;
+    }
+    const actions = {};
+    for (const [id] of ACTIONS) actions[id] = false;
+    for (const node of program.nodes) {
+      if (node.kind === "action" && values[node.id]) actions[node.type] = true;
+    }
+    bot.actions = actions;
+    bot.programValues = values;
+    bot.activeProgramNodes = Object.keys(values).filter((id) => values[id]);
     if (bot.side === "P") state.lastSignals = values;
   }
 
@@ -1229,7 +1684,7 @@
     if (p.coreHits >= 2) notes.push("CORE EXPOSED");
     if (p.bulletIncomingTicks > 8 && p.dodgeTicks > 5) notes.push("GOOD DODGE");
     if (p.lockShots >= Math.max(2, p.wastedShots * 2)) notes.push("GOOD LOCK");
-    if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE BRAIN");
+    if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE PROGRAM");
     return {
       damageDealt: Math.round(p.damageDealt),
       damageTaken: Math.round(p.damageTaken),
@@ -1349,7 +1804,7 @@
     ctx.fillRect(0, 0, state.w, state.h);
     drawTabs();
     if (state.mode === "build") drawBuild();
-    else if (state.mode === "brain") drawBrain();
+    else if (state.mode === "program") drawProgram();
     else if (state.mode === "fight") drawFight();
     else drawShare();
     if (state.toastT > 0) {
@@ -1360,8 +1815,8 @@
     canvas.dataset.mode = state.mode;
     canvas.dataset.blocks = String(state.design.blocks.length);
     canvas.dataset.logic = String(state.design.schematic.logicNodes.length);
-    canvas.dataset.wires = String(state.design.schematic.wires.length);
-    canvas.dataset.rules = String(state.design.brain.rules.length);
+    canvas.dataset.wires = String(state.design.program.wires.length);
+    canvas.dataset.nodes = String(state.design.program.nodes.length);
     canvas.dataset.fight = state.battle
       ? `${state.battle.t.toFixed(1)},${state.battle.bullets.length},${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))},${state.battle.result}`
       : "";
@@ -1380,16 +1835,16 @@
   }
 
   function drawTabs() {
-    const tabs = ["build", "brain", "fight", "share"];
-    const labels = ["Build", "Brain", "Test", "Share"];
+    const tabs = ["build", "program", "fight", "share"];
+    const labels = ["Build", "Program", "Test", "Share"];
     const w = state.w / tabs.length;
     for (let i = 0; i < tabs.length; i += 1) {
       const active = state.mode === tabs[i];
-      ctx.fillStyle = active ? INK : PAPER;
-      ctx.strokeStyle = INK;
+      ctx.fillStyle = active ? ACCENT : PANEL;
+      ctx.strokeStyle = active ? "#3149b5" : "#cbd7e4";
       ctx.lineWidth = active ? 2 : 1;
       roundRect(i * w + 5, 7, w - 10, 30, 8, true, true);
-      text(labels[i], i * w + w / 2, 22, 12, "center", active ? PAPER : INK);
+      text(labels[i], i * w + w / 2, 22, 12, "center", active ? "#fff" : INK);
       addHit("tab", i * w, 0, w, 42, { mode: tabs[i] });
     }
   }
@@ -1427,28 +1882,59 @@
   }
 
   function drawBuildGrid(l) {
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = "#bbb";
+    ctx.fillStyle = "#eef3f8";
+    ctx.strokeStyle = "#d7e2ec";
     ctx.lineWidth = 1;
-    roundRect(l.x - 10, l.y - 10, l.size + 20, l.size + 20, 16, true, true);
+    roundRect(l.x - 14, l.y - 14, l.size + 28, l.size + 28, 24, true, true);
+    drawBuildJoints(l);
     for (let y = 0; y < GRID; y += 1) {
       for (let x = 0; x < GRID; x += 1) {
         const px = l.x + x * l.cell;
         const py = l.y + y * l.cell;
         const b = state.design.blocks.find((q) => q.x === x && q.y === y);
         const place = canPlace(x, y);
-        ctx.strokeStyle = place ? "#c9d8e8" : "#ececec";
-        ctx.lineWidth = place ? 2 : 1;
-        ctx.strokeRect(px + 2, py + 2, l.cell - 4, l.cell - 4);
         if (place && !b) {
-          ctx.fillStyle = "rgba(120,160,200,0.16)";
-          ctx.fillRect(px + 5, py + 5, l.cell - 10, l.cell - 10);
-          if (!state.selectedBlockId) drawBlockIcon(state.selectedBlockType, px + l.cell / 2, py + l.cell / 2, l.cell * 0.58, defaultRot(state.selectedBlockType), { ghost: true });
+          const ok = placementNatural(state.selectedBlockType, x, y);
+          ctx.fillStyle = ok ? "rgba(68, 179, 125, 0.22)" : "rgba(130, 145, 165, 0.14)";
+          ctx.strokeStyle = ok ? "#44b37d" : "#9aa8b6";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(px + l.cell / 2, py + l.cell / 2, ok ? 9 : 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
         }
-        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * 0.92, b.rot, { selected: b.id === state.selectedBlockId });
+        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * (b.type === "core" ? 1.15 : 1.0), b.rot, { selected: b.id === state.selectedBlockId });
         addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
       }
     }
+  }
+
+  function drawBuildJoints(l) {
+    ctx.lineCap = "round";
+    for (const b of state.design.blocks) {
+      for (const d of DIRS) {
+        const n = state.design.blocks.find((q) => q.x === b.x + d.x && q.y === b.y + d.y);
+        if (!n) continue;
+        const ax = l.x + b.x * l.cell + l.cell / 2;
+        const ay = l.y + b.y * l.cell + l.cell / 2;
+        const bx = l.x + n.x * l.cell + l.cell / 2;
+        const by = l.y + n.y * l.cell + l.cell / 2;
+        if (ax > bx || ay > by) continue;
+        ctx.strokeStyle = "#9fb0bf";
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.strokeStyle = "#eaf0f6";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }
+    }
+    ctx.lineCap = "butt";
   }
 
   function drawBuildPalette(l) {
@@ -1459,14 +1945,14 @@
     let x = 14;
     for (const type of PALETTE) {
       const active = state.selectedBlockType === type && !state.selectedBlockId;
-      ctx.fillStyle = active ? INK : "#fff";
-      ctx.strokeStyle = active ? INK : "#ccc";
+      const info = PART_INFO[type];
+      ctx.fillStyle = active ? info.color : "#fff";
+      ctx.strokeStyle = active ? info.dark : "#d8e1ea";
       ctx.lineWidth = active ? 2 : 1;
       roundRect(x, l.paletteY, cardW, cardH, 12, true, true);
-      drawBlockIcon(type, x + cardW / 2, l.paletteY + 22, 31, defaultRot(type), { inverse: active });
-      const info = PART_INFO[type];
-      text(info.name, x + cardW / 2, l.paletteY + 47, 9, "center", active ? PAPER : INK);
-      text(info.role, x + cardW / 2, l.paletteY + 63, 8, "center", active ? PAPER : "#555");
+      drawBlockIcon(type, x + cardW / 2, l.paletteY + 23, 34, defaultRot(type), { card: true, inverse: active });
+      text(info.name, x + cardW / 2, l.paletteY + 49, 9, "center", active ? "#fff" : INK);
+      text(info.role, x + cardW / 2, l.paletteY + 64, 8, "center", active ? "#fff" : info.dark);
       addHit("palette", x, l.paletteY, cardW, cardH, { type });
       x += cardW + gap;
     }
@@ -1475,9 +1961,9 @@
   function drawBuildActions(l) {
     const gap = 10;
     const w = Math.floor((state.w - 34 - gap) / 2);
-    button("Brain", 12, l.actionY, w, 44, false, 13);
+    button("Program", 12, l.actionY, w, 44, false, 13);
     button("Test", 22 + w, l.actionY, w, 44, true, 13);
-    addHit("brain", 12, l.actionY, w, 44);
+    addHit("program", 12, l.actionY, w, 44);
     addHit("fight", 22 + w, l.actionY, w, 44);
   }
 
@@ -1550,6 +2036,21 @@
     return { ok: true, need: "" };
   }
 
+  function programNodeAvailable(node, design = state.design) {
+    if (node.kind === "logic") return { ok: true, need: "" };
+    if (node.kind === "sensor") return chipAvailable("sensor", node.type, design);
+    if (node.kind === "action") return chipAvailable("action", node.type, design);
+    return { ok: false, need: "Locked" };
+  }
+
+  function programNodeSignal(node) {
+    const bot = state.battle?.player;
+    if (bot?.programValues && Object.prototype.hasOwnProperty.call(bot.programValues, node.id)) return !!bot.programValues[node.id];
+    if (node.kind === "sensor") return !!state.battle?.player?.sensors?.[node.type];
+    if (node.kind === "action") return !!state.battle?.player?.actions?.[node.type];
+    return false;
+  }
+
   function buildHints() {
     const c = blockCounts(state.design);
     const hints = [];
@@ -1596,6 +2097,278 @@
     button("Delete", px + 64, py, 58, 32, false, 10);
     addHit("rotate", px, py, 58, 32);
     addHit("delete", px + 64, py, 58, 32);
+  }
+
+  function drawProgram() {
+    const p = state.design.program;
+    text("Program", 16, 56, 15, "left");
+    button("Fit", state.w - 184, 42, 48, 30, false, 10);
+    button("Reset", state.w - 128, 42, 56, 30, false, 10);
+    button("+", state.w - 62, 42, 46, 30, true, 16);
+    addHit("programTool", state.w - 184, 42, 48, 30, { tool: "fit" });
+    addHit("programTool", state.w - 128, 42, 56, 30, { tool: "reset" });
+    addHit("programTool", state.w - 62, 42, 46, 30, { tool: "library" });
+    drawProgramCanvas(p);
+    drawProgramBottomBar();
+    if (state.libraryOpen) drawNodeLibrary();
+  }
+
+  function drawProgramCanvas(program) {
+    const area = programArea();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.x, area.y, area.w, area.h);
+    ctx.clip();
+    ctx.fillStyle = "#edf3f8";
+    ctx.fillRect(area.x, area.y, area.w, area.h);
+    drawProgramGrid(area, program.view);
+    for (const w of program.wires) drawProgramWire(w, false);
+    if (state.connectingPort) drawTempWire();
+    for (const n of program.nodes) drawProgramNode(n);
+    ctx.restore();
+    ctx.strokeStyle = "#ccd8e4";
+    ctx.lineWidth = 1;
+    roundRect(area.x, area.y, area.w, area.h, 18, false, true);
+  }
+
+  function programArea() {
+    return { x: 10, y: 84, w: state.w - 20, h: state.h - 164 };
+  }
+
+  function worldToScreen(wx, wy) {
+    const v = state.design.program.view;
+    const area = programArea();
+    return {
+      x: area.x + area.w / 2 + (wx + v.x) * v.zoom,
+      y: area.y + area.h / 2 + (wy + v.y) * v.zoom,
+    };
+  }
+
+  function screenToWorld(x, y) {
+    const v = state.design.program.view;
+    const area = programArea();
+    return {
+      x: (x - area.x - area.w / 2) / v.zoom - v.x,
+      y: (y - area.y - area.h / 2) / v.zoom - v.y,
+    };
+  }
+
+  function drawProgramGrid(area, view) {
+    const step = Math.max(18, 64 * view.zoom);
+    const ox = (area.x + area.w / 2 + view.x * view.zoom) % step;
+    const oy = (area.y + area.h / 2 + view.y * view.zoom) % step;
+    ctx.strokeStyle = GRID_LINE;
+    ctx.lineWidth = 1;
+    for (let x = area.x + ox; x < area.x + area.w; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, area.y);
+      ctx.lineTo(x, area.y + area.h);
+      ctx.stroke();
+    }
+    for (let y = area.y + oy; y < area.y + area.h; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(area.x, y);
+      ctx.lineTo(area.x + area.w, y);
+      ctx.stroke();
+    }
+  }
+
+  function programNodeSize(node) {
+    const ports = Math.max(1, programInputPorts(node).length);
+    return { w: node.kind === "logic" ? 132 : 156, h: Math.max(76, 48 + ports * 22) };
+  }
+
+  function programNodeRect(node) {
+    const p = worldToScreen(node.x, node.y);
+    const s = programNodeSize(node);
+    const z = state.design.program.view.zoom;
+    return { x: p.x - (s.w * z) / 2, y: p.y - (s.h * z) / 2, w: s.w * z, h: s.h * z };
+  }
+
+  function drawProgramNode(node) {
+    const r = programNodeRect(node);
+    const z = state.design.program.view.zoom;
+    const meta = programNodeMeta(node);
+    const active = !!programNodeSignal(node);
+    const disabled = !programNodeAvailable(node).ok;
+    ctx.fillStyle = disabled ? "#eef0f3" : active ? "#f9ffe9" : "#ffffff";
+    ctx.strokeStyle = active ? SIGNAL : meta.color;
+    ctx.lineWidth = active ? 4 : state.selectedNodeId === node.id ? 3 : 2;
+    ctx.shadowColor = "rgba(30,45,70,0.16)";
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 4;
+    roundRect(r.x, r.y, r.w, r.h, 14 * z, true, true);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = disabled ? "#a5adb6" : meta.color;
+    roundRect(r.x, r.y, r.w, 24 * z, 14 * z, true, false);
+    text(meta.kindLabel, r.x + 10 * z, r.y + 12 * z, Math.max(7, 9 * z), "left", "#fff");
+    text(meta.label, r.x + 14 * z, r.y + 45 * z, Math.max(10, 15 * z), "left", disabled ? "#8a93a0" : INK);
+    text(meta.icon, r.x + r.w - 18 * z, r.y + 45 * z, Math.max(12, 18 * z), "center", disabled ? "#99a2ad" : meta.color);
+    addHit("programNode", r.x, r.y, r.w, r.h, { nodeId: node.id });
+    if (disabled) text(programNodeAvailable(node).need, r.x + 14 * z, r.y + r.h - 14 * z, Math.max(7, 9 * z), "left", DANGER);
+    drawProgramPorts(node, r);
+  }
+
+  function programNodeMeta(node) {
+    if (node.kind === "sensor") {
+      const m = SENSOR_META[node.type] || { label: node.type, short: node.type };
+      return { label: m.label, icon: sensorIcon(node.type), color: "#2d8cff", kindLabel: "SENSOR" };
+    }
+    if (node.kind === "logic") return { label: LOGIC_TYPES[node.type]?.label || node.type, icon: "◇", color: "#9b63ff", kindLabel: "LOGIC" };
+    const m = ACTION_META[node.type] || { label: node.type, short: node.type };
+    return { label: m.label, icon: actionIcon(node.type), color: "#ff9f2e", kindLabel: "ACTION" };
+  }
+
+  function sensorIcon(type) {
+    if (type.includes("enemy")) return "◉";
+    if (type.includes("gun")) return "⌖";
+    if (type.includes("wall")) return "▦";
+    if (type.includes("bullet")) return "!";
+    return "●";
+  }
+
+  function actionIcon(type) {
+    if (type.includes("fire")) return "➤";
+    if (type.includes("aim")) return "⌖";
+    if (type.includes("radar")) return "◜";
+    if (type.includes("orbit")) return "↺";
+    if (type.includes("turn")) return "↷";
+    if (type.includes("move") || type === "stop") return "▸";
+    return "◆";
+  }
+
+  function drawProgramPorts(node, r) {
+    const z = state.design.program.view.zoom;
+    const inputs = programInputPorts(node);
+    for (let i = 0; i < inputs.length; i += 1) {
+      const p = programPortScreen(node, inputs[i]);
+      drawPortDot(p.x, p.y, "#4a5564", z);
+      addHit("programPort", p.x - 14, p.y - 14, 28, 28, { nodeId: node.id, port: inputs[i], dir: "in" });
+    }
+    if (node.kind !== "action") {
+      const p = programPortScreen(node, "out");
+      drawPortDot(p.x, p.y, "#1c9b63", z);
+      addHit("programPort", p.x - 14, p.y - 14, 28, 28, { nodeId: node.id, port: "out", dir: "out" });
+    }
+  }
+
+  function drawPortDot(x, y, color, z) {
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, 2 * z);
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(5, 7 * z), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  function programPortScreen(node, port) {
+    const r = programNodeRect(node);
+    const inputs = programInputPorts(node);
+    if (port === "out") return { x: r.x + r.w, y: r.y + r.h / 2 };
+    const i = Math.max(0, inputs.indexOf(port));
+    return { x: r.x, y: r.y + ((i + 1) * r.h) / (inputs.length + 1) };
+  }
+
+  function drawProgramWire(w, temp) {
+    const program = state.design.program;
+    const from = program.nodes.find((n) => n.id === w.fromNode);
+    const to = program.nodes.find((n) => n.id === w.toNode);
+    if (!from || !to) return;
+    const a = programPortScreen(from, w.fromPort);
+    const b = programPortScreen(to, w.toPort);
+    const active = !!programNodeSignal(from);
+    const selected = state.selectedProgramWireId === w.id;
+    ctx.strokeStyle = temp ? "#6b7280" : selected ? "#ffcc4d" : active ? SIGNAL : "#7d8a99";
+    ctx.lineWidth = temp ? 3 : selected ? 6 : active ? 5 : 3;
+    ctx.beginPath();
+    const dx = Math.max(80, Math.abs(b.x - a.x) * 0.45);
+    ctx.moveTo(a.x, a.y);
+    ctx.bezierCurveTo(a.x + dx, a.y, b.x - dx, b.y, b.x, b.y);
+    ctx.stroke();
+    const hx = Math.min(a.x, b.x) - 10;
+    const hy = Math.min(a.y, b.y) - 12;
+    addHit("programWire", hx, hy, Math.abs(b.x - a.x) + 20, Math.abs(b.y - a.y) + 24, { wireId: w.id });
+  }
+
+  function drawTempWire() {
+    const from = state.design.program.nodes.find((n) => n.id === state.connectingPort.nodeId);
+    if (!from) return;
+    const a = programPortScreen(from, state.connectingPort.port);
+    const b = { x: state.pointer.lastX || a.x, y: state.pointer.lastY || a.y };
+    ctx.strokeStyle = "#34d399";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([8, 8]);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.bezierCurveTo(a.x + 80, a.y, b.x - 80, b.y, b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawProgramBottomBar() {
+    const y = state.h - 68;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    roundRect(10, y - 8, state.w - 20, 60, 16, true, false);
+    button("Build", 18, y, 70, 38, false, 11);
+    button("Delete", 98, y, 76, 38, !!state.selectedProgramWireId || !!state.selectedNodeId, 11);
+    button("Test", state.w - 92, y, 74, 38, true, 12);
+    addHit("build", 18, y, 70, 38);
+    addHit("programTool", 98, y, 76, 38, { tool: "delete" });
+    addHit("fight", state.w - 92, y, 74, 38);
+    const z = state.design.program.view.zoom;
+    text(`${Math.round(z * 100)}%`, state.w / 2, y + 19, 11, "center", "#657386");
+  }
+
+  function drawNodeLibrary() {
+    const w = Math.min(360, state.w - 24);
+    const h = 250;
+    const x = (state.w - w) / 2;
+    const y = state.h - h - 76;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#c9d6e2";
+    ctx.lineWidth = 1;
+    roundRect(x, y, w, h, 18, true, true);
+    text("Node Library", x + 16, y + 24, 14, "left");
+    const tabs = [["sensor", "Sensors"], ["logic", "Logic"], ["action", "Actions"]];
+    let tx = x + 14;
+    for (const [id, label] of tabs) {
+      const on = state.libraryTab === id;
+      ctx.fillStyle = on ? "#243b53" : "#eef3f8";
+      ctx.strokeStyle = "transparent";
+      roundRect(tx, y + 42, 88, 30, 12, true, false);
+      text(label, tx + 44, y + 57, 10, "center", on ? "#fff" : "#4b5a6a");
+      addHit("libraryTab", tx, y + 42, 88, 30, { tab: id });
+      tx += 94;
+    }
+    const entries = libraryEntries(state.libraryTab);
+    let px = x + 14;
+    let py = y + 86;
+    for (const item of entries) {
+      const cardW = 104;
+      const cardH = 46;
+      if (px + cardW > x + w - 12) {
+        px = x + 14;
+        py += cardH + 10;
+      }
+      const available = item.kind === "logic" ? { ok: true } : programNodeAvailable({ kind: item.kind, type: item.type });
+      const meta = programNodeMeta({ kind: item.kind, type: item.type });
+      ctx.fillStyle = available.ok ? "#f8fbfd" : "#f0f1f3";
+      ctx.strokeStyle = available.ok ? meta.color : "#c8ced6";
+      ctx.lineWidth = 1;
+      roundRect(px, py, cardW, cardH, 12, true, true);
+      text(meta.icon, px + 18, py + 22, 16, "center", available.ok ? meta.color : "#999");
+      text(meta.label.replace("Enemy ", ""), px + 36, py + 17, 9, "left", available.ok ? INK : "#999");
+      text(available.ok ? meta.kindLabel : available.need, px + 36, py + 31, 7, "left", available.ok ? "#657386" : DANGER);
+      addHit("libraryNode", px, py, cardW, cardH, { kindType: item.kind, type: item.type });
+      px += cardW + 8;
+    }
+  }
+
+  function libraryEntries(kind) {
+    if (kind === "sensor") return Object.keys(SENSOR_META).map((type) => ({ kind: "sensor", type }));
+    if (kind === "logic") return Object.keys(LOGIC_TYPES).map((type) => ({ kind: "logic", type }));
+    return Object.keys(ACTION_META).map((type) => ({ kind: "action", type }));
   }
 
   function drawBrain() {
@@ -1963,12 +2736,12 @@
     button("Restart", 10, y, 78, 34, false, 11);
     button("Next", 96, y, 58, 34, false, 11);
     button("Build", state.w - 226, y, 64, 34, false, 11);
-    button("Brain", state.w - 154, y, 68, 34, false, 11);
+    button("Program", state.w - 166, y, 80, 34, false, 10);
     button("Share", state.w - 78, y, 68, 34, false, 11);
     addHit("restart", 10, y, 78, 34);
     addHit("nextEnemy", 96, y, 58, 34);
     addHit("build", state.w - 226, y, 64, 34);
-    addHit("brain", state.w - 154, y, 68, 34);
+    addHit("program", state.w - 166, y, 80, 34);
     addHit("share", state.w - 78, y, 68, 34);
     if (b.result) {
       const info = b.analysis || resultAnalysis(b);
@@ -2007,7 +2780,7 @@
   function drawMiniCircuit(b) {
     const x = 12;
     const y = state.h - 136;
-    text("Live Brain", x, y - 10, 10, "left", "#555");
+    text("Signal Strip", x, y - 10, 10, "left", "#5c6d80");
     const items = [
       ["SEE", b.player.sensors.enemySeen],
       ["NEAR", b.player.sensors.enemyNear],
@@ -2030,19 +2803,19 @@
       text(label, px + 17, y + 10, label.length > 4 ? 6 : 7, "center", on ? PAPER : INK);
       px += 37;
     }
-    const active = state.design.brain.rules.filter((r) => b.player.ruleStates?.[r.id]).slice(0, 4);
+    const activeNodes = state.design.program.nodes.filter((n) => b.player.programValues?.[n.id] && n.kind === "action").slice(0, 4);
     let rx = x;
     const ry = y + 28;
-    if (!active.length) {
-      text("No rule firing", x, ry + 11, 9, "left", "#777");
+    if (!activeNodes.length) {
+      text("No action signal", x, ry + 11, 9, "left", "#777");
     }
-    for (const r of active) {
-      const label = (r.actions[0] && ACTION_META[r.actions[0].action]?.short) || "Rule";
-      ctx.fillStyle = INK;
-      ctx.strokeStyle = INK;
+    for (const n of activeNodes) {
+      const label = ACTION_META[n.type]?.short || n.type;
+      ctx.fillStyle = "#ffb454";
+      ctx.strokeStyle = "#de7b1f";
       ctx.lineWidth = 1;
       roundRect(rx, ry, 76, 25, 10, true, true);
-      text(label, rx + 38, ry + 13, 9, "center", PAPER);
+      text(label, rx + 38, ry + 13, 9, "center", "#1b2430");
       rx += 82;
     }
     const pulses = [];
@@ -2059,7 +2832,7 @@
 
   function drawShare() {
     text("BOT CODE", 16, 58, 15, "left");
-    text("Export your build + brain. Import a rival.", 16, 86, 10, "left", "#555");
+    text("Export your build + program. Import a rival.", 16, 86, 10, "left", "#555");
     if (state.opponent) text(`OPPONENT: ${state.opponent.name}`, 16, state.h - 110, 12, "left");
     button("FIGHT IMPORTED", 16, state.h - 72, state.w - 32, 42, true, 14);
     addHit("fightImported", 16, state.h - 72, state.w - 32, 42);
@@ -2076,66 +2849,134 @@
     if (opt.ghost) ctx.globalAlpha = 0.28;
     const inverse = opt.inverse;
     const flash = opt.flash > 0;
-    const ink = inverse || flash ? PAPER : INK;
-    const paper = inverse || flash ? INK : PAPER;
-    ctx.fillStyle = paper;
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(2, Math.round(s / 7));
-    ctx.fillRect(-s / 2, -s / 2, s, s);
-    ctx.strokeRect(-s / 2, -s / 2, s, s);
+    const info = PART_INFO[type] || PART_INFO.core;
+    const base = inverse ? "#ffffff" : flash ? "#ffffff" : info.color;
+    const dark = inverse ? "#ffffff" : info.dark;
+    ctx.shadowColor = "rgba(20,30,45,0.18)";
+    ctx.shadowBlur = opt.card ? 0 : 8;
+    ctx.shadowOffsetY = opt.card ? 0 : 3;
     if (opt.selected) {
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 4;
-      ctx.strokeRect(-s / 2 - 4, -s / 2 - 4, s + 8, s + 8);
+      ctx.strokeStyle = "#ffcc4d";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.66, 0, Math.PI * 2);
+      ctx.stroke();
     }
-    ctx.fillStyle = ink;
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(2, s / 11);
     if (type === "core") {
+      ctx.fillStyle = base;
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(2, s / 11);
       ctx.beginPath();
-      ctx.arc(0, 0, s * 0.25, 0, Math.PI * 2);
+      for (let i = 0; i < 6; i += 1) {
+        const a = Math.PI / 6 + (Math.PI * 2 * i) / 6;
+        const px = Math.cos(a) * s * 0.42;
+        const py = Math.sin(a) * s * 0.42;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
       ctx.stroke();
-      ctx.fillRect(-s * 0.08, -s * 0.08, s * 0.16, s * 0.16);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#fff3b0";
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(1, s / 18);
+      ctx.stroke();
     } else if (type === "wheel") {
-      ctx.fillRect(-s * 0.45, -s * 0.32, s * 0.15, s * 0.64);
-      ctx.fillRect(s * 0.3, -s * 0.32, s * 0.15, s * 0.64);
-      ctx.fillRect(-s * 0.2, -s * 0.08, s * 0.4, s * 0.16);
+      ctx.fillStyle = "#2f3c4d";
+      ctx.strokeStyle = "#151b22";
+      ctx.lineWidth = Math.max(2, s / 10);
+      for (const ox of [-s * 0.24, s * 0.24]) {
+        ctx.beginPath();
+        ctx.arc(ox, 0, s * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = base;
+        ctx.beginPath();
+        ctx.arc(ox, 0, s * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#2f3c4d";
+      }
+      ctx.fillStyle = base;
+      roundRect(-s * 0.38, -s * 0.1, s * 0.76, s * 0.2, s * 0.08, true, false);
     } else if (type === "gun") {
-      ctx.fillRect(-s * 0.16, -s * 0.16, s * 0.32, s * 0.32);
-      ctx.fillRect(0, -s * 0.08, s * 0.46, s * 0.16);
-      ctx.fillRect(s * 0.4, -s * 0.13, s * 0.12, s * 0.26);
+      ctx.fillStyle = base;
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(2, s / 12);
+      ctx.beginPath();
+      ctx.arc(-s * 0.12, 0, s * 0.24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      roundRect(-s * 0.02, -s * 0.11, s * 0.58, s * 0.22, s * 0.08, true, true);
+      ctx.fillStyle = dark;
+      roundRect(s * 0.42, -s * 0.16, s * 0.18, s * 0.32, s * 0.04, true, false);
     } else if (type === "radar") {
+      ctx.fillStyle = "rgba(72,198,217,0.22)";
       ctx.beginPath();
-      ctx.arc(0, 0, s * 0.23, -0.8, 0.8);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, s * 0.35, -0.8, 0.8);
-      ctx.stroke();
-      ctx.fillRect(-s * 0.06, -s * 0.06, s * 0.12, s * 0.12);
-      ctx.fillRect(0, -s * 0.04, s * 0.35, s * 0.08);
-    } else if (type === "armor") {
-      ctx.lineWidth = Math.max(3, s / 5.5);
-      ctx.strokeRect(-s * 0.36, -s * 0.36, s * 0.72, s * 0.72);
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, s * 0.56, -0.55, 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = base;
+      ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 13);
       ctx.beginPath();
-      ctx.moveTo(s * 0.22, -s * 0.34);
-      ctx.lineTo(s * 0.22, s * 0.34);
+      ctx.arc(-s * 0.05, 0, s * 0.22, -1.2, 1.2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(-s * 0.05, 0, s * 0.34, -1.0, 1.0);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(-s * 0.08, 0, s * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (type === "armor") {
+      ctx.fillStyle = base;
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(2, s / 12);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.38, -s * 0.32);
+      ctx.lineTo(s * 0.3, -s * 0.42);
+      ctx.lineTo(s * 0.42, 0);
+      ctx.lineTo(s * 0.3, s * 0.42);
+      ctx.lineTo(-s * 0.38, s * 0.32);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "#dce6ef";
+      ctx.lineWidth = Math.max(1, s / 18);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.18, -s * 0.25);
+      ctx.lineTo(s * 0.19, -s * 0.29);
+      ctx.moveTo(-s * 0.18, 0);
+      ctx.lineTo(s * 0.25, 0);
+      ctx.moveTo(-s * 0.18, s * 0.25);
+      ctx.lineTo(s * 0.19, s * 0.29);
       ctx.stroke();
     } else if (type === "battery") {
-      ctx.strokeRect(-s * 0.28, -s * 0.26, s * 0.48, s * 0.52);
-      ctx.fillRect(s * 0.2, -s * 0.1, s * 0.12, s * 0.2);
-      ctx.fillRect(-s * 0.18, -s * 0.06, s * 0.24, s * 0.12);
-      ctx.fillRect(-s * 0.08, -s * 0.16, s * 0.05, s * 0.32);
+      ctx.fillStyle = base;
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(2, s / 12);
+      roundRect(-s * 0.28, -s * 0.38, s * 0.56, s * 0.76, s * 0.11, true, true);
+      ctx.fillStyle = dark;
+      roundRect(-s * 0.13, -s * 0.49, s * 0.26, s * 0.12, s * 0.04, true, false);
+      ctx.fillStyle = "#ddffe2";
+      roundRect(-s * 0.17, -s * 0.2, s * 0.34, s * 0.13, s * 0.03, true, false);
+      roundRect(-s * 0.17, s * 0.03, s * 0.34, s * 0.13, s * 0.03, true, false);
     }
     ctx.restore();
   }
 
   function button(label, x, y, w, h, active = false, size = 12) {
-    ctx.fillStyle = active ? INK : PAPER;
-    ctx.strokeStyle = INK;
+    ctx.fillStyle = active ? ACCENT : PANEL;
+    ctx.strokeStyle = active ? "#3149b5" : "#cbd7e4";
     ctx.lineWidth = active ? 2 : 1;
     roundRect(x, y, w, h, 10, true, true);
-    text(label, x + w / 2, y + h / 2 + 1, size, "center", active ? PAPER : INK);
+    text(label, x + w / 2, y + h / 2 + 1, size, "center", active ? "#fff" : INK);
   }
 
   function roundRect(x, y, w, h, r, fill = true, stroke = false) {
@@ -2161,14 +3002,20 @@
 
   function text(value, x, y, size, align = "left", color = INK) {
     ctx.fillStyle = color;
-    ctx.font = `700 ${size}px "Courier New", monospace`;
+    ctx.font = `700 ${size}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`;
     ctx.textAlign = align;
     ctx.textBaseline = "middle";
     ctx.fillText(String(value), Math.round(x), Math.round(y));
   }
 
   function exportCode(design) {
-    const clean = normalizeDesign(design);
+    const normalized = normalizeDesign(design);
+    const clean = {
+      version: 3,
+      name: normalized.name,
+      blocks: normalized.blocks.map((b) => ({ id: b.id, type: b.type, x: b.x, y: b.y, rot: b.rot })),
+      program: normalized.program,
+    };
     const json = JSON.stringify(clean);
     const bytes = new TextEncoder().encode(json);
     let bin = "";
@@ -2178,14 +3025,15 @@
 
   function importCode(code) {
     const trimmed = String(code || "").trim();
-    const prefix = trimmed.startsWith(PREFIX) ? PREFIX : trimmed.startsWith(OLD_PREFIX) ? OLD_PREFIX : "";
+    const prefix = trimmed.startsWith(PREFIX) ? PREFIX : OLD_PREFIXES.find((p) => trimmed.startsWith(p)) || "";
     if (!prefix) throw new Error("BAD PREFIX");
     let b64 = trimmed.slice(prefix.length).replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
     const bin = atob(b64);
     const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
     const raw = JSON.parse(new TextDecoder().decode(bytes));
-    if (raw.version !== 1 && raw.version !== 2) throw new Error("BAD VERSION");
+    if (raw.version !== 1 && raw.version !== 2 && raw.version !== 3) throw new Error("BAD VERSION");
+    if (prefix !== PREFIX && !raw.program) raw.program = defaultProgram();
     return validateImportedDesign(raw);
   }
 
@@ -2194,7 +3042,8 @@
     if (!Array.isArray(raw.blocks) || raw.blocks.length > MAX_BLOCKS) throw new Error("BAD BLOCKS");
     if (raw.schematic && (!Array.isArray(raw.schematic.logicNodes) || !Array.isArray(raw.schematic.wires))) throw new Error("BAD SCHEMATIC");
     if (raw.schematic && (raw.schematic.logicNodes.length > MAX_LOGIC || raw.schematic.wires.length > MAX_WIRES)) throw new Error("TOO MANY NODES");
-    if (raw.brain?.rules && raw.brain.rules.length > 12) throw new Error("TOO MANY RULES");
+    if (raw.program?.nodes && raw.program.nodes.length > MAX_NODES) throw new Error("TOO MANY NODES");
+    if (raw.program?.wires && raw.program.wires.length > MAX_WIRES) throw new Error("TOO MANY WIRES");
     return normalizeDesign(raw);
   }
 
@@ -2206,7 +3055,7 @@
       <textarea id="export-code" readonly spellcheck="false"></textarea>
       <button id="copy-code" type="button">COPY</button>
       <label>IMPORT</label>
-      <textarea id="import-code" spellcheck="false" placeholder="CBA2:..."></textarea>
+      <textarea id="import-code" spellcheck="false" placeholder="CBA3:..."></textarea>
       <button id="import-code-btn" type="button">IMPORT AS OPPONENT</button>
       <div id="share-message"></div>
     `;

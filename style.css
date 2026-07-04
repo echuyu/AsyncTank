@@ -1,12 +1,20 @@
 :root {
   color-scheme: light;
-  --bg: #f4f5f6;
+  --bg: #f2f5f8;
   --panel: #fff;
-  --ink: #111;
-  --muted: #666;
-  --line: #d6d6d6;
-  --active: #111;
-  --danger: #9a1d1d;
+  --ink: #17202a;
+  --muted: #657386;
+  --grid: #dce5ed;
+  --line: #cbd7e4;
+  --accent: #4c6fff;
+  --core: #f4b43c;
+  --move: #4c6fff;
+  --weapon: #ef596f;
+  --sensor: #48c6d9;
+  --armor: #7d91a8;
+  --energy: #55c878;
+  --signal: #7ee787;
+  --danger: #ef596f;
   --paper: var(--bg);
 }
 
@@ -22,7 +30,7 @@ body {
   overflow: hidden;
   background: var(--paper);
   color: var(--ink);
-  font-family: "Courier New", ui-monospace, monospace;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 body {
@@ -49,7 +57,7 @@ body {
   transform: translateX(-50%);
   display: none;
   color: var(--ink);
-  font-family: "Courier New", ui-monospace, monospace;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 700;
   pointer-events: auto;
 }
@@ -70,7 +78,7 @@ body {
   background: var(--panel);
   color: var(--ink);
   padding: 8px;
-  font: 700 11px "Courier New", ui-monospace, monospace;
+  font: 700 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   outline: none;
 }
 
@@ -78,11 +86,11 @@ body {
   width: 100%;
   height: 34px;
   margin-top: 5px;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--accent);
   border-radius: 12px;
-  background: var(--ink);
+  background: var(--accent);
   color: var(--panel);
-  font: 700 12px "Courier New", ui-monospace, monospace;
+  font: 700 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 @media (max-width: 430px) {
