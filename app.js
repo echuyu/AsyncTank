@@ -21,12 +21,12 @@
   const MIRROR_ROT = [0, 3, 2, 1];
 
   const PARTS = {
-    core: { hp: 24, mass: 5 },
-    leg: { hp: 7, mass: 1.1, drive: 230 },
+    core: { hp: 20, mass: 5 },
+    leg: { hp: 6, mass: 1.1, drive: 230 },
     wheel: { hp: 5, mass: 0.75, drive: 310 },
-    spike: { hp: 6, mass: 1.2 },
-    shield: { hp: 17, mass: 2.8 },
-    hammer: { hp: 9, mass: 2.1 },
+    spike: { hp: 5, mass: 1.2 },
+    shield: { hp: 16, mass: 2.8 },
+    hammer: { hp: 8, mass: 2.1 },
     weight: { hp: 18, mass: 4.4 },
     wing: { hp: 5, mass: 0.45, lift: 24 },
     spring: { hp: 6, mass: 0.9 },
@@ -135,13 +135,24 @@
         ],
       }),
       normalizeBuild({
-        name: "Turtle",
+        name: "Shield Wall",
+        parts: [
+          core(),
+          placed("shield", 6, 3, 1),
+          placed("leg", 5, 4, 2),
+          placed("leg", 6, 4, 2),
+          placed("weight", 4, 3, 3),
+        ],
+      }),
+      normalizeBuild({
+        name: "Hammer Head",
         parts: [
           core(),
           placed("shield", 6, 3, 1),
           placed("hammer", 6, 2, 1),
-          placed("weight", 5, 4, 2),
-          placed("leg", 4, 4, 2),
+          placed("leg", 5, 4, 2),
+          placed("leg", 6, 4, 2),
+          placed("weight", 4, 3, 3),
         ],
       }),
       normalizeBuild({
@@ -162,17 +173,17 @@
           placed("weight", 4, 3, 3),
           placed("weight", 4, 4, 2),
           placed("weight", 5, 4, 2),
-          placed("wheel", 6, 4, 2),
+          placed("leg", 6, 4, 2),
         ],
       }),
       normalizeBuild({
-        name: "Hammer Head",
+        name: "Low Stabber",
         parts: [
           core(),
-          placed("shield", 6, 3, 1),
-          placed("hammer", 6, 2, 1),
           placed("leg", 5, 4, 2),
-          placed("leg", 6, 4, 2),
+          placed("spike", 6, 4, 1),
+          placed("wheel", 5, 5, 2),
+          placed("wheel", 6, 5, 2),
           placed("weight", 4, 3, 3),
         ],
       }),
@@ -500,20 +511,26 @@
   function startFight(replay) {
     const enemy = state.enemies[state.enemyIndex];
     state.mode = "fight";
-    const cell = clamp(Math.floor(state.w / 7.8), 46, 54);
+    const cell = clamp(Math.floor(state.w / 7), 52, 62);
     state.battle = {
       t: 0,
-      intro: replay ? 0.35 : 0.9,
+      phase: "intro",
+      intro: replay ? 0.35 : 0.75,
       result: "",
       pending: "",
       pendingT: 0,
       record: !replay,
       cell,
+      clashGap: Math.round(cell * 0.58),
       shake: 0,
       flash: 0,
+      slow: 0,
       particles: [],
-      player: makeBattleBot(state.build, 1, -cell * 2.1, cell),
-      enemy: makeBattleBot(enemy, -1, state.w + cell * 2.1, cell),
+      debris: [],
+      events: [],
+      eventCounts: {},
+      player: makeBattleBot(state.build, 1, -cell * 1.8, cell),
+      enemy: makeBattleBot(enemy, -1, state.w + cell * 1.8, cell),
       enemyName: enemy.name,
     };
   }
@@ -521,16 +538,26 @@
   function makeBattleBot(build, facing, x, cell) {
     const parts = build.parts.map((p) => ({
       ...p,
+      localX: p.x - CORE_X,
+      localY: p.y - CORE_Y,
       hp: PARTS[p.type].hp,
       maxHp: PARTS[p.type].hp,
       alive: true,
-      cool: Math.random() * 0.25,
+      broken: false,
+      detached: false,
+      cooldown: Math.random() * 0.28,
+      cool: Math.random() * 0.28,
+      windup: 0,
       swing: 0,
       bite: 0,
+      fuse: 0,
       flash: 0,
+      worldX: x,
+      worldY: 0,
     }));
     const bot = {
       facing,
+      build,
       x,
       y: state.h * 0.58,
       vx: 0,
@@ -538,9 +565,14 @@
       angle: 0,
       av: 0,
       mass: 1,
+      stagger: 0,
+      recoil: 0,
+      stepTimer: 0.18 + Math.random() * 0.2,
+      stepPose: 0,
+      defeated: false,
       bottom: cell * 0.5,
       top: -cell * 0.5,
-      groundOffset: facing === 1 ? -10 : 10,
+      groundOffset: facing === 1 ? -8 : 8,
       parts,
       coreFlash: 0,
       dead: false,
@@ -551,16 +583,17 @@
   }
 
   function fightGround() {
-    return Math.round(state.h * 0.72);
+    return Math.round(state.h * 0.67);
   }
 
   function recalcBot(bot, cell) {
-    const alive = bot.parts.filter((p) => p.alive);
+    const alive = bot.parts.filter((p) => p.alive && !p.detached);
     bot.mass = Math.max(1, alive.reduce((sum, p) => sum + PARTS[p.type].mass, 0));
     bot.bottom = alive.length ? Math.max(...alive.map((p) => (p.y - CORE_Y) * cell + cell * 0.48)) : cell * 0.5;
     bot.top = alive.length ? Math.min(...alive.map((p) => (p.y - CORE_Y) * cell - cell * 0.48)) : -cell * 0.5;
     const c = alive.find((p) => p.type === "core");
     bot.dead = !c || c.hp <= 0;
+    bot.defeated = bot.dead;
   }
 
   function coreHp(bot) {
@@ -585,17 +618,18 @@
       return;
     }
 
-    const simDt = dt;
+    const simDt = b.slow > 0 ? dt * 0.35 : dt;
+    b.slow = Math.max(0, b.slow - dt);
     b.t += simDt;
     b.intro = Math.max(0, b.intro - simDt);
-    updateBot(b.player, b.enemy, simDt, b);
-    updateBot(b.enemy, b.player, simDt, b);
-    collideBots(b.player, b.enemy, simDt, b);
-    separateBots(b.player, b.enemy, b);
-    attackBot(b.player, b.enemy, simDt, b);
-    attackBot(b.enemy, b.player, simDt, b);
-    crashPressure(b.player, b.enemy, simDt, b);
-    crashPressure(b.enemy, b.player, simDt, b);
+    updateBattleEffects(b, simDt);
+    updateBotV2(b.player, b.enemy, simDt, b);
+    updateBotV2(b.enemy, b.player, simDt, b);
+    updateBattleSpacing(b.player, b.enemy, simDt, b);
+    updateWorldPartCache(b.player, b.cell);
+    updateWorldPartCache(b.enemy, b.cell);
+    runCombatEvents(b.player, b.enemy, simDt, b);
+    runCombatEvents(b.enemy, b.player, simDt, b);
     recalcBot(b.player, b.cell);
     recalcBot(b.enemy, b.cell);
 
@@ -629,43 +663,284 @@
     burst(state.w / 2, state.h * 0.42, 34, b, 1.8);
   }
 
-  function updateBot(bot, foe, dt, b) {
-    let drive = 0;
-    let lift = 0;
-    let wheel = 0;
+  function updateBattleEffects(b, dt) {
+    b.events = b.events.filter((e) => {
+      e.duration -= dt;
+      return e.duration > 0;
+    });
+    for (const d of b.debris) {
+      d.life -= dt;
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      d.vy += 320 * dt;
+      d.rot += d.spin * dt;
+    }
+    b.debris = b.debris.filter((d) => d.life > 0);
+  }
+
+  function updateBotV2(bot, foe, dt, b) {
+    let movers = 0;
+    let wheels = 0;
+    let weights = 0;
     for (const p of bot.parts) {
-      if (!p.alive) continue;
-      p.cool = Math.max(0, p.cool - dt);
+      if (!p.alive || p.detached) continue;
+      p.cooldown = Math.max(0, p.cooldown - dt);
+      p.cool = p.cooldown;
+      if (p.windup > 0) {
+        p.windup -= dt;
+        if (p.windup <= 0 && p.type === "hammer") swingHammer(bot, foe, p, b);
+      }
       p.swing = Math.max(0, p.swing - dt);
       p.bite = Math.max(0, p.bite - dt);
       p.flash = Math.max(0, p.flash - dt);
-      if ((p.type === "leg" || p.type === "wheel") && p.y >= CORE_Y) {
-        drive += PARTS[p.type].drive;
-        if (p.type === "wheel") wheel += 1;
+      if (p.fuse > 0) {
+        p.fuse -= dt;
+        if (p.fuse <= 0) explodeBomb(bot, p, b);
       }
-      if (p.type === "wing") lift += PARTS.wing.lift;
+      if (p.type === "leg" && p.y >= CORE_Y) movers += 1;
+      if (p.type === "wheel" && p.y >= CORE_Y) wheels += 1;
+      if (p.type === "weight") weights += 1;
     }
-    const introPush = b.intro > 0 ? 1.85 : 1;
-    bot.vx += (bot.facing * drive * introPush * dt) / Math.max(1, bot.mass * 0.38);
-    bot.vx *= Math.pow(0.9, dt * 8);
-    const cap = 210 + wheel * 26;
-    bot.vx = clamp(bot.vx, -cap, cap);
-
-    bot.vy += (105 - lift / Math.max(1, bot.mass * 0.22)) * dt;
-    bot.x += bot.vx * dt;
-    bot.y += bot.vy * dt;
+    bot.stagger = Math.max(0, bot.stagger - dt);
+    bot.recoil = Math.max(0, bot.recoil - dt * 58);
+    bot.stepPose = Math.max(0, bot.stepPose - dt * 5);
+    bot.stepTimer -= dt * (bot.stagger > 0 ? 0.35 : 1);
+    if (bot.stepTimer <= 0) {
+      const pace = clamp(0.48 - wheels * 0.045 + weights * 0.035, 0.28, 0.62);
+      bot.stepTimer = pace;
+      bot.stepPose = 1;
+      if (b.phase === "approach") {
+        bot.x += bot.facing * (7 + movers * 3 + wheels * 6) / Math.max(1, 1 + weights * 0.18);
+      } else if (b.phase === "clash" && bot.stagger <= 0) {
+        bot.x += bot.facing * Math.max(1, 3 + wheels - weights);
+      }
+    }
     const ground = fightGround() + bot.groundOffset;
-    if (bot.y + bot.bottom > ground) {
-      bot.y = ground - bot.bottom;
-      bot.vy *= -0.08;
+    bot.y = ground - bot.bottom - Math.sin(bot.stepPose * Math.PI) * 5;
+    const com = centerOfMass(bot);
+    bot.angle = clamp(com.x * bot.facing * 0.035 + Math.sin(b.t * 8 + bot.facing) * 0.025 * bot.stepPose, -0.18, 0.18);
+    bot.coreFlash = Math.max(0, bot.coreFlash - dt);
+  }
+
+  function updateBattleSpacing(player, enemy, dt, b) {
+    const pf = frontBounds(player, b.cell);
+    const ef = frontBounds(enemy, b.cell);
+    const gap = ef.front - pf.front;
+    if (b.intro > 0) {
+      b.phase = "intro";
+    } else if (gap > b.clashGap + b.cell * 0.28) {
+      b.phase = "approach";
+    } else {
+      if (b.phase !== "clash") {
+        eventAt(b, "recoil", state.w / 2, fightGround() - b.cell, 0.22);
+        b.shake = Math.max(b.shake, 6);
+      }
+      b.phase = "clash";
     }
 
-    const com = centerOfMass(bot);
-    bot.av += (com.x * bot.facing * 0.0018 - bot.angle * 1.3) * dt;
-    bot.av *= Math.pow(0.78, dt * 8);
-    bot.angle = clamp(bot.angle + bot.av, -0.32, 0.32);
-    bot.coreFlash = Math.max(0, bot.coreFlash - dt);
-    foe.x += 0;
+    if (b.phase === "intro" || b.phase === "approach") {
+      const ps = approachSpeed(player);
+      const es = approachSpeed(enemy);
+      player.x += player.facing * ps * dt;
+      enemy.x += enemy.facing * es * dt;
+    }
+
+    const pf2 = frontBounds(player, b.cell);
+    const ef2 = frontBounds(enemy, b.cell);
+    const nowGap = ef2.front - pf2.front;
+    if (nowGap < b.clashGap) {
+      const fix = (b.clashGap - nowGap) * 0.5;
+      player.x -= fix;
+      enemy.x += fix;
+    } else if (b.phase === "clash" && nowGap > b.clashGap + 18) {
+      const close = Math.min(16, nowGap - b.clashGap) * dt * 3;
+      player.x += close;
+      enemy.x -= close;
+    }
+  }
+
+  function approachSpeed(bot) {
+    let legs = 0;
+    let wheels = 0;
+    let weights = 0;
+    for (const p of bot.parts) {
+      if (!p.alive || p.detached) continue;
+      if (p.type === "leg" && p.y >= CORE_Y) legs += 1;
+      if (p.type === "wheel" && p.y >= CORE_Y) wheels += 1;
+      if (p.type === "weight") weights += 1;
+    }
+    return Math.max(18, 34 + legs * 14 + wheels * 28 - weights * 8);
+  }
+
+  function frontBounds(bot, cell) {
+    let alive = bot.parts.filter((p) => p.alive && !p.detached && p.type !== "spike" && p.type !== "hammer");
+    if (!alive.length) alive = bot.parts.filter((p) => p.alive && !p.detached);
+    if (!alive.length) return { front: bot.x, back: bot.x };
+    const xs = alive.map((p) => {
+      const w = partWorld(bot, p, cell);
+      return { x: w.x, r: partRadius(p.type, cell) * 0.72 };
+    });
+    if (bot.facing === 1) {
+      return {
+        front: Math.max(...xs.map((p) => p.x + p.r)),
+        back: Math.min(...xs.map((p) => p.x - p.r)),
+      };
+    }
+    return {
+      front: Math.min(...xs.map((p) => p.x - p.r)),
+      back: Math.max(...xs.map((p) => p.x + p.r)),
+    };
+  }
+
+  function partRadius(type, cell) {
+    if (type === "core") return cell * 0.46;
+    if (type === "shield") return cell * 0.48;
+    if (type === "weight" || type === "wheel" || type === "bomb") return cell * 0.43;
+    if (type === "leg") return cell * 0.34;
+    if (type === "spike") return cell * 0.38;
+    return cell * 0.4;
+  }
+
+  function updateWorldPartCache(bot, cell) {
+    for (const p of bot.parts) {
+      if (!p.alive || p.detached) continue;
+      const w = partWorld(bot, p, cell);
+      p.worldX = w.x;
+      p.worldY = w.y;
+    }
+  }
+
+  function runCombatEvents(attacker, defender, dt, battle) {
+    if (battle.phase !== "clash" || attacker.stagger > 0.55) return;
+    for (const p of attacker.parts) {
+      if (!p.alive || p.detached || p.fuse > 0) continue;
+      if (p.type === "spike") trySpikeStab(attacker, defender, p, battle);
+      else if (p.type === "hammer") tryHammerWindup(attacker, p, battle);
+    }
+  }
+
+  function trySpikeStab(attacker, defender, p, battle) {
+    if (p.cooldown > 0) return;
+    const dir = partDirection(attacker, p);
+    if (dir.x * attacker.facing < 0.55) return;
+    const pos = partWorld(attacker, p, battle.cell);
+    const start = { x: pos.x + dir.x * battle.cell * 0.25, y: pos.y + dir.y * battle.cell * 0.25 };
+    const end = { x: pos.x + dir.x * battle.cell * 1.42, y: pos.y + dir.y * battle.cell * 1.42 };
+    const target = firstLineTarget(defender, start, end, battle.cell * 0.42, battle);
+    if (!target) return;
+    p.cooldown = 0.78;
+    p.cool = p.cooldown;
+    p.swing = 0.12;
+    const impact = {
+      x: (end.x + target.x) / 2,
+      y: (end.y + target.y) / 2,
+    };
+    if (target.part.type === "shield" && shieldFacesSource(defender, target.part, pos.x, pos.y, battle.cell)) {
+      blockAttack(attacker, defender, target.part, pos, impact, battle, 1.0);
+      return;
+    }
+    eventAt(battle, "stab", impact.x, impact.y, 0.28, { attackerId: p.id, targetId: target.part.id });
+    spark(impact.x, impact.y, battle, 5);
+    damagePart(defender, target.part, target.part.type === "core" ? 3.0 : 2.8, pos.x, pos.y, battle, "stab");
+    attacker.recoil = Math.max(attacker.recoil, 6);
+    defender.stagger = Math.max(defender.stagger, 0.12);
+  }
+
+  function tryHammerWindup(attacker, p, battle) {
+    if (p.cooldown > 0 || p.windup > 0 || p.swing > 0) return;
+    const dir = partDirection(attacker, p);
+    if (dir.x * attacker.facing < 0.2) return;
+    p.windup = 0.26;
+    p.cooldown = 1.18;
+    p.cool = p.cooldown;
+    const pos = partWorld(attacker, p, battle.cell);
+    eventAt(battle, "hammer", pos.x + dir.x * battle.cell * 0.7, pos.y + dir.y * battle.cell * 0.7, 0.22, {
+      attackerId: p.id,
+      windup: true,
+    });
+  }
+
+  function swingHammer(attacker, defender, p, battle) {
+    if (!p.alive || p.detached) return;
+    p.swing = 0.38;
+    const pos = partWorld(attacker, p, battle.cell);
+    const dir = partDirection(attacker, p);
+    const target = swingTarget(defender, pos, dir, battle);
+    const cx = pos.x + dir.x * battle.cell * 1.03;
+    const cy = pos.y + dir.y * battle.cell * 1.03;
+    eventAt(battle, "hammer", cx, cy, 0.34, { attackerId: p.id });
+    if (!target) return;
+    const impact = { x: target.x, y: target.y };
+    if (target.part.type === "shield" && shieldFacesSource(defender, target.part, pos.x, pos.y, battle.cell)) {
+      blockAttack(attacker, defender, target.part, pos, impact, battle, 1.8);
+      return;
+    }
+    shock(impact.x, impact.y, battle, "hammer");
+    eventAt(battle, "hammer", impact.x, impact.y, 0.32, { attackerId: p.id, targetId: target.part.id, hit: true });
+    damagePart(defender, target.part, target.part.type === "core" ? 5.2 : 5, pos.x, pos.y, battle, "hammer");
+    defender.stagger = Math.max(defender.stagger, 0.42);
+    defender.recoil = Math.max(defender.recoil, 15);
+    defender.x += attacker.facing * 10 / Math.max(1, defender.mass * 0.25);
+  }
+
+  function blockAttack(attacker, defender, shield, source, impact, battle, amount) {
+    eventAt(battle, "block", impact.x, impact.y, 0.32, { targetId: shield.id });
+    shieldClang(impact.x, impact.y, battle);
+    damagePart(defender, shield, amount, source.x, source.y, battle, "block");
+    attacker.stagger = Math.max(attacker.stagger, 0.18);
+    attacker.recoil = Math.max(attacker.recoil, 18);
+    attacker.x -= attacker.facing * 10;
+  }
+
+  function firstLineTarget(bot, start, end, width, battle) {
+    const dir = norm({ x: end.x - start.x, y: end.y - start.y });
+    const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+    let best = null;
+    for (const p of bot.parts) {
+      if (!p.alive || p.detached) continue;
+      const w = partWorld(bot, p, battle.cell);
+      const vx = w.x - start.x;
+      const vy = w.y - start.y;
+      const t = vx * dir.x + vy * dir.y;
+      if (t < -battle.cell * 0.2 || t > len + battle.cell * 0.2) continue;
+      const px = start.x + dir.x * t;
+      const py = start.y + dir.y * t;
+      const dist = Math.hypot(w.x - px, w.y - py);
+      if (dist > width + partRadius(p.type, battle.cell) * 0.32) continue;
+      const score = t - (p.type === "shield" ? battle.cell * 0.2 : 0) + Math.abs(w.y - start.y) * 0.15;
+      if (!best || score < best.score) best = { part: p, x: w.x, y: w.y, score };
+    }
+    return best;
+  }
+
+  function swingTarget(bot, origin, dir, battle) {
+    let best = null;
+    for (const p of bot.parts) {
+      if (!p.alive || p.detached) continue;
+      const w = partWorld(bot, p, battle.cell);
+      const vx = w.x - origin.x;
+      const vy = w.y - origin.y;
+      const ahead = vx * dir.x + vy * dir.y;
+      const side = Math.abs(vx * -dir.y + vy * dir.x);
+      if (ahead < battle.cell * 0.1 || ahead > battle.cell * 1.75) continue;
+      if (side > battle.cell * 1.02) continue;
+      const highBias = Math.max(0, (CORE_Y - p.y) * 9);
+      const score = ahead + side * 0.65 - highBias - (p.type === "shield" ? battle.cell * 0.25 : 0);
+      if (!best || score < best.score) best = { part: p, x: w.x, y: w.y, score };
+    }
+    return best;
+  }
+
+  function shieldFacesSource(bot, shield, sx, sy, cell) {
+    const w = partWorld(bot, shield, cell);
+    const face = partDirection(bot, shield);
+    const source = norm({ x: sx - w.x, y: sy - w.y });
+    return face.x * source.x + face.y * source.y > 0.25;
+  }
+
+  function eventAt(battle, kind, x, y, duration = 0.25, data = {}) {
+    battle.events.push({ kind, x, y, duration, max: duration, ...data });
+    battle.eventCounts[kind] = (battle.eventCounts[kind] || 0) + 1;
   }
 
   function centerOfMass(bot) {
@@ -682,159 +957,20 @@
     return { x: sx / Math.max(1, sm), y: sy / Math.max(1, sm) };
   }
 
-  function collideBots(a, b, dt, battle) {
-    const ap = worldParts(a, battle.cell);
-    const bp = worldParts(b, battle.cell);
-    for (const pa of ap) {
-      for (const pb of bp) {
-        const dx = pb.x - pa.x;
-        const dy = pb.y - pa.y;
-        const d = Math.hypot(dx, dy) || 0.001;
-        const min = battle.cell * 0.98;
-        if (d > min) continue;
-        const nx = dx / d;
-        const ny = dy / d;
-        const spring = pa.part.type === "spring" || pb.part.type === "spring";
-        const push = (min - d) * (spring ? 44 : 25);
-        a.vx -= (nx * push * dt * b.mass) / (a.mass + b.mass);
-        b.vx += (nx * push * dt * a.mass) / (a.mass + b.mass);
-        a.vy -= ny * push * dt * 0.3;
-        b.vy += ny * push * dt * 0.3;
-        if (spring) {
-          battle.shake = Math.max(battle.shake, 7);
-          shock((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, battle);
-        }
-        if (Math.abs(a.vx - b.vx) > 70) battle.shake = Math.max(battle.shake, 4);
-        const scrape = (spring ? 1.2 : 0.28) * dt;
-        damagePart(a, pa.part, scrape, pb.x, pb.y, battle);
-        damagePart(b, pb.part, scrape, pa.x, pa.y, battle);
-      }
-    }
-  }
-
-  function separateBots(a, b, battle) {
-    const dx = b.x - a.x;
-    const desired = battle.cell * 2.25;
-    const adx = Math.abs(dx) || 0.001;
-    if (adx >= desired) return;
-    const dir = dx >= 0 ? 1 : -1;
-    const push = (desired - adx) * 0.54;
-    a.x -= dir * push * (b.mass / (a.mass + b.mass));
-    b.x += dir * push * (a.mass / (a.mass + b.mass));
-    a.vx *= 0.34;
-    b.vx *= 0.34;
-    battle.shake = Math.max(battle.shake, 3 + (desired - adx) * 0.04);
-    if (Math.random() < 0.18) spark((a.x + b.x) / 2, (a.y + b.y) / 2 - battle.cell * 0.2, battle, 2);
-  }
-
-  function attackBot(attacker, defender, dt, battle) {
-    for (const p of attacker.parts) {
-      if (!p.alive) continue;
-      const pos = partWorld(attacker, p, battle.cell);
-      const dir = partDirection(attacker, p);
-      if (p.type === "spike") {
-        const hx = pos.x + dir.x * battle.cell * 0.74;
-        const hy = pos.y + dir.y * battle.cell * 0.74;
-        if (hitNearest(defender, hx, hy, battle.cell * 0.58, 8.0 * dt, battle, "spike")) {
-          spark(hx, hy, battle, 3);
-        }
-      } else if (p.type === "hammer" && p.cool <= 0) {
-        const hx = pos.x + dir.x * battle.cell * 1.05;
-        const hy = pos.y + dir.y * battle.cell * 1.05;
-        p.swing = 0.32;
-        if (hitNearest(defender, hx, hy, battle.cell * 0.92, 4.8, battle, "hammer")) {
-          defender.vx += dir.x * 42;
-          defender.vy += dir.y * 14;
-          battle.shake = Math.max(battle.shake, 7);
-          shock(hx, hy, battle);
-        }
-        p.cool = 0.82;
-      } else if (p.type === "jaw" && p.cool <= 0) {
-        const hx = pos.x + dir.x * battle.cell * 0.86;
-        const hy = pos.y + dir.y * battle.cell * 0.86;
-        if (hitNearest(defender, hx, hy, battle.cell * 0.76, 3.6, battle, "jaw")) {
-          defender.vx += dir.x * 26;
-          p.bite = 0.18;
-          spark(hx, hy, battle, 5);
-        }
-        p.cool = 0.5;
-      }
-    }
-  }
-
-  function crashPressure(attacker, defender, dt, battle) {
-    const dx = Math.abs(attacker.x - defender.x);
-    const reach = battle.cell * 3.25;
-    if (dx > reach) return;
-    const power = botPower(attacker);
-    const squeeze = 1 - dx / reach;
-    const amount = (0.82 + power * 0.014) * squeeze * dt;
-    const target = nearestLivePart(defender, attacker.x, attacker.y, battle.cell);
-    if (!target) return;
-    damagePart(defender, target.part, amount, attacker.x, attacker.y, battle, "crash");
-    if (Math.random() < squeeze * 0.35) spark(target.x, target.y, battle, 2);
-  }
-
-  function botPower(bot) {
-    let power = Math.abs(bot.vx) * 0.35 + bot.mass * 0.18;
-    for (const p of bot.parts) {
-      if (!p.alive) continue;
-      if (p.type === "spike") power += 28;
-      else if (p.type === "hammer") power += 22;
-      else if (p.type === "jaw") power += 18;
-      else if (p.type === "weight") power += 10;
-      else if (p.type === "wheel") power += 8;
-      else if (p.type === "leg") power += 6;
-    }
-    return power;
-  }
-
   function liveMass(bot) {
-    return bot.parts.reduce((sum, p) => (p.alive ? sum + PARTS[p.type].mass : sum), 0);
-  }
-
-  function nearestLivePart(bot, x, y, cell) {
-    let best = null;
-    let bestD = Infinity;
-    for (const p of bot.parts) {
-      if (!p.alive) continue;
-      const w = partWorld(bot, p, cell);
-      const d = Math.hypot(w.x - x, w.y - y) + (p.type === "core" ? cell * 0.55 : 0);
-      if (d < bestD) {
-        best = { part: p, x: w.x, y: w.y };
-        bestD = d;
-      }
-    }
-    return best;
-  }
-
-  function hitNearest(bot, x, y, radius, amount, battle, tag) {
-    let best = null;
-    let bestD = Infinity;
-    for (const p of bot.parts) {
-      if (!p.alive) continue;
-      const w = partWorld(bot, p, battle.cell);
-      const d = Math.hypot(w.x - x, w.y - y);
-      if (d < radius && d < bestD) {
-        best = { part: p, x: w.x, y: w.y };
-        bestD = d;
-      }
-    }
-    if (!best) return false;
-    damagePart(bot, best.part, amount, x, y, battle, tag);
-    return true;
+    return bot.parts.reduce((sum, p) => (p.alive && !p.detached ? sum + PARTS[p.type].mass : sum), 0);
   }
 
   function damagePart(bot, part, amount, sx, sy, battle, tag = "") {
-    if (!part.alive || amount <= 0) return;
+    if (!part.alive || part.detached || amount <= 0) return;
+    if (part.type === "bomb" && part.fuse > 0) return;
     const w = partWorld(bot, part, battle.cell);
     let dmg = amount;
-    if (part.type === "shield") {
-      const face = partDirection(bot, part);
-      const incoming = norm({ x: sx - w.x, y: sy - w.y });
-      if (face.x * incoming.x + face.y * incoming.y > 0.05) {
-        dmg *= 0.32;
-        if (tag) shieldClang(w.x, w.y, battle);
+    if (part.type === "shield" && tag !== "block" && shieldFacesSource(bot, part, sx, sy, battle.cell)) {
+      dmg *= 0.3;
+      if (tag) {
+        eventAt(battle, "block", w.x, w.y, 0.26, { targetId: part.id });
+        shieldClang(w.x, w.y, battle);
       }
     }
     if (part.type === "weight") dmg *= 0.7;
@@ -843,16 +979,34 @@
     if (part.type === "core") {
       bot.coreFlash = 0.25;
       battle.flash = 0.08;
+      battle.slow = Math.max(battle.slow, 0.08);
+      eventAt(battle, "coreHit", w.x, w.y, 0.24, { targetId: part.id });
     }
     if (part.hp <= 0) breakPart(bot, part, battle);
   }
 
   function breakPart(bot, part, battle) {
     if (!part.alive) return;
+    if (part.type === "bomb" && part.fuse <= 0 && !part.broken) {
+      part.broken = true;
+      part.fuse = 0.28;
+      part.flash = 0.28;
+      eventAt(battle, "spark", partWorld(bot, part, battle.cell).x, partWorld(bot, part, battle.cell).y, 0.25, { targetId: part.id });
+      battle.shake = Math.max(battle.shake, 6);
+      return;
+    }
     part.alive = false;
+    part.broken = true;
     const w = partWorld(bot, part, battle.cell);
+    spawnDebris(part, w.x, w.y, battle, bot.facing);
     burst(w.x, w.y, part.type === "core" ? 26 : 12, battle, part.type === "core" ? 1.6 : 1);
-    if (part.type === "bomb") explode(w.x, w.y, battle);
+    eventAt(battle, part.type === "core" ? "coreBreak" : "break", w.x, w.y, part.type === "core" ? 0.55 : 0.32, {
+      targetId: part.id,
+    });
+    if (part.type === "core") {
+      battle.slow = Math.max(battle.slow, 0.42);
+      battle.shake = Math.max(battle.shake, 18);
+    }
     removeOrphans(bot, battle);
   }
 
@@ -863,7 +1017,9 @@
     if (!map.has(root)) {
       for (const p of live) {
         p.alive = false;
+        p.detached = true;
         const w = partWorld(bot, p, battle.cell);
+        spawnDebris(p, w.x, w.y, battle, bot.facing);
         burst(w.x, w.y, 8, battle, 0.9);
       }
       return;
@@ -884,14 +1040,29 @@
     for (const p of live) {
       if (keep.has(`${p.x},${p.y}`)) continue;
       p.alive = false;
+      p.detached = true;
       const w = partWorld(bot, p, battle.cell);
+      spawnDebris(p, w.x, w.y, battle, bot.facing);
+      eventAt(battle, "break", w.x, w.y, 0.25, { targetId: p.id, detached: true });
       burst(w.x, w.y, 7, battle, 0.8);
     }
+  }
+
+  function explodeBomb(owner, bomb, battle) {
+    if (!bomb.alive) return;
+    const w = partWorld(owner, bomb, battle.cell);
+    bomb.alive = false;
+    bomb.detached = true;
+    bomb.broken = true;
+    spawnDebris(bomb, w.x, w.y, battle, owner.facing);
+    explode(w.x, w.y, battle);
+    removeOrphans(owner, battle);
   }
 
   function explode(x, y, battle) {
     battle.shake = Math.max(battle.shake, 18);
     battle.flash = 0.16;
+    eventAt(battle, "explode", x, y, 0.48);
     battle.particles.push({ kind: "boom", x, y, r: 8, life: 0.42, max: 0.42 });
     for (const bot of [battle.player, battle.enemy]) {
       for (const p of bot.parts) {
@@ -899,14 +1070,23 @@
         const w = partWorld(bot, p, battle.cell);
         const d = Math.hypot(w.x - x, w.y - y);
         if (d < battle.cell * 2.5) {
-          damagePart(bot, p, 7.2 * (1 - d / (battle.cell * 2.5)) + 1.2, x, y, battle, "bomb");
+          damagePart(bot, p, 8.0 * (1 - d / (battle.cell * 2.5)) + 1.2, x, y, battle, "bomb");
         }
       }
     }
   }
 
-  function worldParts(bot, cell) {
-    return bot.parts.filter((p) => p.alive).map((p) => ({ part: p, ...partWorld(bot, p, cell) }));
+  function spawnDebris(part, x, y, battle, facing) {
+    battle.debris.push({
+      type: part.type,
+      x,
+      y,
+      vx: (Math.random() * 80 + 40) * -facing + (Math.random() - 0.5) * 70,
+      vy: -110 - Math.random() * 80,
+      rot: Math.random() * Math.PI,
+      spin: (Math.random() - 0.5) * 7,
+      life: part.type === "core" ? 0.9 : 0.65,
+    });
   }
 
   function partWorld(bot, p, cell) {
@@ -1187,6 +1367,8 @@
     drawGround();
     drawBot(b.player, b.cell, b);
     drawBot(b.enemy, b.cell, b);
+    drawDebris(b);
+    drawBattleEvents(b);
     drawParticles(b);
     ctx.restore();
     if (b.flash > 0) {
@@ -1214,9 +1396,9 @@
   function drawEnemyMark(name) {
     const x = state.w / 2;
     const y = 56;
-    for (let i = 0; i < Math.min(5, state.enemyIndex + 1); i += 1) {
+    for (let i = 0; i < Math.min(6, state.enemyIndex + 1); i += 1) {
       ctx.fillStyle = INK;
-      ctx.fillRect(x - 18 + i * 9, y, 5, 5);
+      ctx.fillRect(x - 23 + i * 9, y, 5, 5);
     }
     if (name === "DEF") text("DEF", x, y + 10, 10, "center");
   }
@@ -1235,6 +1417,7 @@
       const w = partWorld(bot, p, cell);
       const rot = bot.facing === 1 ? p.rotation : MIRROR_ROT[p.rotation];
       const extra = (p.swing ? Math.sin((p.swing / 0.32) * Math.PI) * bot.facing * 0.82 : 0) +
+        (p.windup ? -Math.sin((p.windup / 0.26) * Math.PI) * bot.facing * 0.34 : 0) +
         (p.bite ? Math.sin((p.bite / 0.18) * Math.PI) * bot.facing * 0.24 : 0);
       if (p.type === "hammer" && p.swing) drawHammerTrail(w.x, w.y, cell, rot, bot.facing, p.swing);
       drawPart(p.type, w.x, w.y, cell * (p.type === "core" ? 1.22 : 1.04), rot, {
@@ -1281,6 +1464,80 @@
     ctx.arc(cell * 0.1 * facing, 0, cell * 0.68, -0.8 + progress * 0.45, 0.55 + progress * 0.45);
     ctx.stroke();
     ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawDebris(battle) {
+    for (const d of battle.debris) {
+      ctx.save();
+      ctx.globalAlpha = clamp(d.life / 0.35, 0, 1);
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.rot);
+      drawPart(d.type, 0, 0, battle.cell * (d.type === "core" ? 0.85 : 0.68), 1, { mode: "fight" });
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBattleEvents(battle) {
+    for (const e of battle.events) {
+      const t = clamp(e.duration / Math.max(0.001, e.max || e.duration), 0, 1);
+      ctx.save();
+      ctx.globalAlpha = clamp(t * 1.4, 0, 1);
+      ctx.strokeStyle = INK;
+      ctx.fillStyle = INK;
+      if (e.kind === "stab") {
+        ctx.lineWidth = 4;
+        for (let i = 0; i < 4; i += 1) {
+          const a = i * Math.PI * 0.5 + t;
+          ctx.beginPath();
+          ctx.moveTo(e.x, e.y);
+          ctx.lineTo(e.x + Math.cos(a) * (10 + 12 * t), e.y + Math.sin(a) * (10 + 12 * t));
+          ctx.stroke();
+        }
+      } else if (e.kind === "block") {
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(e.x - 22 * t, e.y - 18);
+        ctx.lineTo(e.x - 7 * t, e.y - 5);
+        ctx.moveTo(e.x + 22 * t, e.y + 18);
+        ctx.lineTo(e.x + 7 * t, e.y + 5);
+        ctx.moveTo(e.x - 18, e.y + 16 * t);
+        ctx.lineTo(e.x + 18, e.y - 16 * t);
+        ctx.stroke();
+      } else if (e.kind === "hammer") {
+        ctx.lineWidth = e.hit ? 7 : 4;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, 8 + (1 - t) * 34, -0.35, Math.PI * 1.15);
+        ctx.stroke();
+      } else if (e.kind === "explode") {
+        ctx.lineWidth = 7;
+        jaggedCircle(e.x, e.y, 18 + (1 - t) * 62, 14);
+        ctx.stroke();
+      } else if (e.kind === "break" || e.kind === "coreBreak") {
+        ctx.lineWidth = e.kind === "coreBreak" ? 7 : 4;
+        jaggedCircle(e.x, e.y, 10 + (1 - t) * (e.kind === "coreBreak" ? 48 : 24), 10);
+        ctx.stroke();
+      } else if (e.kind === "coreHit") {
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(e.x - 12, e.y - 16);
+        ctx.lineTo(e.x + 4, e.y - 2);
+        ctx.lineTo(e.x - 8, e.y + 12);
+        ctx.moveTo(e.x + 14, e.y - 8);
+        ctx.lineTo(e.x + 2, e.y + 8);
+        ctx.stroke();
+      } else if (e.kind === "recoil") {
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y - 34 * t);
+        ctx.lineTo(e.x, e.y + 34 * t);
+        ctx.stroke();
+      } else if (e.kind === "spark") {
+        for (let i = 0; i < 5; i += 1) ctx.fillRect(e.x + i * 5 - 12, e.y + ((i % 2) * 8 - 4), 4, 4);
+      }
+      ctx.restore();
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -1601,11 +1858,15 @@
       enemy: state.enemies[state.enemyIndex]?.name,
       result: state.battle?.result || state.battle?.pending || "",
       hp: state.battle ? [coreHp(state.battle.player), coreHp(state.battle.enemy)] : null,
+      phase: state.battle?.phase || "",
+      eventCounts: state.battle ? { ...state.battle.eventCounts } : {},
       hits: state.hits.length,
     };
     canvas.dataset.mode = state.mode;
     canvas.dataset.result = state.battle?.result || state.battle?.pending || "";
     canvas.dataset.hp = state.battle ? `${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))}` : "";
+    canvas.dataset.phase = state.battle?.phase || "";
+    canvas.dataset.events = state.battle ? JSON.stringify(state.battle.eventCounts) : "";
     canvas.dataset.fight = state.battle
       ? `${state.battle.t.toFixed(1)},${Math.round(state.battle.player.x)},${Math.round(state.battle.enemy.x)},${state.battle.player.parts.filter((p) => p.alive).length},${state.battle.enemy.parts.filter((p) => p.alive).length}`
       : "";
