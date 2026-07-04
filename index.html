@@ -2,57 +2,12 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Egg Core Bot Battle</title>
-    <link rel="stylesheet" href="style.css?v=20260704-eggcore3">
+    <link rel="stylesheet" href="style.css?v=20260704-toybot16">
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <h1>Egg Core Bot Battle</h1>
-        <span id="modeBadge">BUILD</span>
-      </header>
-
-      <section class="stage">
-        <canvas id="game" width="480" height="320" aria-label="Egg Core Bot Battle canvas"></canvas>
-
-        <aside class="panel" aria-label="controls">
-          <div class="tabs">
-            <button id="buildTab" type="button">BUILD</button>
-            <button id="battleTab" type="button">BATTLE</button>
-          </div>
-
-          <div id="tray" class="tray" aria-label="part tray"></div>
-
-          <div class="row">
-            <button id="rotateBtn" type="button">R</button>
-            <button id="eraseBtn" type="button">DEL</button>
-            <button id="randomBtn" type="button">RANDOM</button>
-          </div>
-
-          <div class="row">
-            <button id="saveBtn" type="button">SAVE</button>
-            <button id="defenseBtn" type="button">DEF</button>
-            <button id="testBtn" type="button">TEST</button>
-          </div>
-
-          <label class="enemy-line">
-            ENEMY
-            <select id="enemySelect"></select>
-          </label>
-
-          <div class="row battle-row">
-            <button id="replayBtn" type="button">REPLAY</button>
-            <button id="backBuildBtn" type="button">BUILD</button>
-            <button id="nextBtn" type="button">NEXT</button>
-          </div>
-
-          <div id="status" class="status">PARTS 0/10</div>
-          <ol id="logList" class="log-list" aria-label="battle log"></ol>
-        </aside>
-      </section>
-    </main>
-
-    <script type="module" src="app.js?v=20260704-eggcore3"></script>
+    <canvas id="game" aria-label="Egg Core Bot Battle"></canvas>
+    <script type="module" src="app.js?v=20260704-toybot16"></script>
   </body>
 </html>

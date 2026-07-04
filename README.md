@@ -1,6 +1,6 @@
 # Egg Core Bot Battle
 
-White-and-black pixel MVP for an async PvP-style bot battler.
+White-and-black pixel toy bot battler.
 
 ## Run
 
@@ -9,13 +9,12 @@ npm install
 npm run dev
 ```
 
-The GitHub Pages build is static and served from the repository root.
+## Play
 
-## MVP
+- Pick a part icon from the tray.
+- Tap a core-connected grid cell to attach it.
+- Tap a part, then rotate or delete it.
+- Press FIGHT to watch the bots crash.
+- Use RETRY / GARAGE / NEXT after the result.
 
-- Build an egg-core bot on an 11x7 grid.
-- Attach up to 10 parts to the core-connected body.
-- Rotate parts with `R`, delete with right click or `Backspace`.
-- Save player and defense bots to `localStorage`.
-- Fight 5 built-in enemy bots in an automatic Canvas battle.
-- Store simple battle logs locally.
+The game is Canvas-only, uses no image assets, and stores builds locally.
