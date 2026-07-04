@@ -1,173 +1,177 @@
 (async function boot() {
   const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js");
-  const RAPIER = await import("https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.17.3/rapier.es.js");
-  await RAPIER.init();
 
   const TAU = Math.PI * 2;
-  const ARENA_RADIUS = 5.18;
-  const RIM_RADIUS = 3.2;
-  const KO_RADIUS = 4.7;
+  const TRACK_WIDTH = 1.38;
+  const LAPS = 2;
+  const MAX_RACE_TIME = 42;
+  const ROAD_SEGMENTS = 420;
 
   const slotDefs = [
-    ...Array.from({ length: 12 }, (_, index) => ({
-      id: `ring${index}`,
-      angle: (TAU * index) / 12,
-      label: `R${index + 1}`,
-      vertical: 0,
-      mapRadius: 42
-    })),
-    ...Array.from({ length: 6 }, (_, index) => ({
-      id: `cap${index}`,
-      angle: (TAU * index) / 6 + TAU / 12,
-      label: `C${index + 1}`,
-      vertical: 0.48,
-      mapRadius: 23
-    }))
-  ].map((slot) => ({
-    ...slot,
-    mapX: 50 + Math.sin(slot.angle) * slot.mapRadius,
-    mapY: 50 - Math.cos(slot.angle) * slot.mapRadius
-  }));
+    { id: "nose", label: "NOSE", x: 50, y: 15, mount: [0, 0.28, 0.8], scale: 1.08 },
+    { id: "left", label: "LEFT", x: 20, y: 45, mount: [-0.48, 0.22, 0.05], scale: 0.94 },
+    { id: "core", label: "CORE", x: 50, y: 45, mount: [0, 0.36, 0.08], scale: 1 },
+    { id: "right", label: "RIGHT", x: 80, y: 45, mount: [0.48, 0.22, 0.05], scale: 0.94 },
+    { id: "tail", label: "TAIL", x: 50, y: 76, mount: [0, 0.25, -0.76], scale: 1.08 },
+    { id: "top", label: "TOP", x: 50, y: 31, mount: [0, 0.56, 0.26], scale: 0.86 }
+  ];
 
   const parts = {
-    empty: { mark: "·", name: "EMPTY", color: "#687176", mass: 0, role: "core" },
-    eye: { mark: "◉", name: "EYE", color: "#55d8f0", mass: 0.12, role: "sense" },
-    jet: { mark: "↯", name: "JET", color: "#ffb84e", mass: 0.22, role: "move" },
-    spike: { mark: "▲", name: "SPIKE", color: "#ff6461", mass: 0.3, role: "attack" },
-    cannon: { mark: "●", name: "GUN", color: "#f4df62", mass: 0.36, role: "attack" },
-    shield: { mark: "▰", name: "SHIELD", color: "#7ee081", mass: 0.32, role: "guard" },
-    weight: { mark: "◆", name: "WEIGHT", color: "#9b8cff", mass: 0.55, role: "mass" }
+    empty: { mark: "·", name: "EMPTY", color: "#69737a", role: "core", stats: {} },
+    booster: {
+      mark: "↯",
+      name: "BOOSTER",
+      color: "#ffb84e",
+      role: "speed",
+      stats: { top: 0.42, accel: 0.16, boost: 0.92, grip: -0.12, stability: -0.16, mass: 0.18 }
+    },
+    roller: {
+      mark: "◎",
+      name: "ROLLER",
+      color: "#55d8f0",
+      role: "wall",
+      stats: { wall: 0.88, grip: 0.12, stability: 0.08, top: -0.06, mass: 0.14 }
+    },
+    grip: {
+      mark: "●",
+      name: "GRIP",
+      color: "#7ee081",
+      role: "grip",
+      stats: { grip: 0.78, accel: 0.16, top: -0.1, mass: 0.16 }
+    },
+    weight: {
+      mark: "◆",
+      name: "WEIGHT",
+      color: "#9b8cff",
+      role: "stability",
+      stats: { stability: 0.72, wall: 0.2, top: -0.32, accel: -0.12, mass: 0.74 }
+    },
+    wing: {
+      mark: "▱",
+      name: "WING",
+      color: "#f4df62",
+      role: "air",
+      stats: { air: 0.95, stability: 0.2, grip: 0.08, top: -0.06, mass: 0.1 }
+    },
+    bumper: {
+      mark: "▰",
+      name: "BUMPER",
+      color: "#ff6461",
+      role: "guard",
+      stats: { toughness: 0.76, wall: 0.32, stability: 0.18, top: -0.08, mass: 0.24 }
+    }
   };
 
   const paletteGroups = [
-    { label: "CORE", ids: ["empty", "eye"] },
-    { label: "MOVE", ids: ["jet"] },
-    { label: "HIT", ids: ["spike", "cannon"] },
-    { label: "GUARD", ids: ["shield", "weight"] }
+    { label: "RUN", ids: ["booster", "grip"] },
+    { label: "STAY", ids: ["roller", "weight"] },
+    { label: "JUMP", ids: ["wing", "bumper"] },
+    { label: "CLEAR", ids: ["empty"] }
   ];
 
   const playerPresets = [
-    makeBlueprint("Mono Core", {
-      ring0: "eye",
-      ring1: "spike",
-      ring11: "cannon",
-      ring3: "shield",
-      ring5: "jet",
-      ring6: "jet",
-      ring8: "weight",
-      cap0: "eye",
-      cap3: "weight"
+    makeBuild("Pocket Rocket", {
+      nose: "bumper",
+      left: "roller",
+      core: "grip",
+      right: "roller",
+      tail: "booster",
+      top: "wing"
     }),
-    makeBlueprint("Needle", {
-      ring0: "spike",
-      ring1: "spike",
-      ring11: "spike",
-      ring2: "eye",
-      ring5: "jet",
-      ring6: "jet",
-      ring7: "jet",
-      cap0: "spike",
-      cap2: "weight"
+    makeBuild("Boost Needle", {
+      nose: "booster",
+      left: "grip",
+      core: "booster",
+      right: "grip",
+      tail: "booster",
+      top: "wing"
     }),
-    makeBlueprint("Orbit", {
-      ring0: "eye",
-      ring2: "jet",
-      ring3: "cannon",
-      ring5: "shield",
-      ring6: "weight",
-      ring8: "jet",
-      ring9: "cannon",
-      cap1: "eye",
-      cap4: "shield"
+    makeBuild("Wall Rider", {
+      nose: "bumper",
+      left: "roller",
+      core: "weight",
+      right: "roller",
+      tail: "booster",
+      top: "grip"
     }),
-    makeBlueprint("Shell", {
-      ring0: "cannon",
-      ring1: "shield",
-      ring2: "shield",
-      ring3: "shield",
-      ring5: "weight",
-      ring6: "jet",
-      ring8: "weight",
-      ring9: "shield",
-      ring10: "shield",
-      ring11: "shield",
-      cap0: "eye",
-      cap3: "weight"
+    makeBuild("Low Heavy", {
+      nose: "bumper",
+      left: "weight",
+      core: "weight",
+      right: "weight",
+      tail: "booster",
+      top: "roller"
     })
   ];
 
-  const enemyPresets = [
-    makeBlueprint("Red Ram", {
-      ring0: "eye",
-      ring1: "spike",
-      ring11: "spike",
-      ring5: "jet",
-      ring6: "jet",
-      ring7: "weight",
-      ring9: "shield",
-      cap0: "spike"
+  const rivalPresets = [
+    makeBuild("Red Comet", {
+      nose: "booster",
+      left: "grip",
+      core: "booster",
+      right: "grip",
+      tail: "booster",
+      top: "wing"
     }),
-    makeBlueprint("Sidewinder", {
-      ring2: "eye",
-      ring3: "cannon",
-      ring4: "jet",
-      ring8: "jet",
-      ring10: "shield",
-      ring6: "weight",
-      cap2: "cannon"
+    makeBuild("Corner King", {
+      nose: "bumper",
+      left: "roller",
+      core: "grip",
+      right: "roller",
+      tail: "booster",
+      top: "weight"
     }),
-    makeBlueprint("Citadel", {
-      ring0: "cannon",
-      ring1: "shield",
-      ring2: "weight",
-      ring3: "shield",
-      ring5: "shield",
-      ring6: "eye",
-      ring7: "shield",
-      ring9: "shield",
-      ring10: "weight",
-      ring11: "shield",
-      cap1: "shield",
-      cap4: "shield"
+    makeBuild("Stone Wall", {
+      nose: "bumper",
+      left: "weight",
+      core: "weight",
+      right: "weight",
+      tail: "roller",
+      top: "grip"
     })
+  ];
+
+  const featureZones = [
+    { type: "boost", start: 0.02, end: 0.11, color: 0x55d8f0 },
+    { type: "jump", start: 0.25, end: 0.32, color: 0xf4df62 },
+    { type: "rough", start: 0.52, end: 0.64, color: 0x9b8cff },
+    { type: "boost", start: 0.75, end: 0.84, color: 0xffb84e },
+    { type: "wall", start: 0.88, end: 0.97, color: 0xff6461 }
   ];
 
   const els = {
     scene: document.querySelector("#scene"),
-    bodyMap: document.querySelector("#bodyMap"),
+    garageMap: document.querySelector("#garageMap"),
     selectionReadout: document.querySelector("#selectionReadout"),
     builderTelemetry: document.querySelector("#builderTelemetry"),
     palette: document.querySelector("#palette"),
     presets: document.querySelector("#presets"),
-    enemySelect: document.querySelector("#enemySelect"),
-    battleBtn: document.querySelector("#battleBtn"),
+    rivalSelect: document.querySelector("#rivalSelect"),
+    raceBtn: document.querySelector("#raceBtn"),
     resetBtn: document.querySelector("#resetBtn"),
     exportBtn: document.querySelector("#exportBtn"),
     importBtn: document.querySelector("#importBtn"),
     codeBox: document.querySelector("#codeBox"),
-    botName: document.querySelector("#botName"),
-    battleState: document.querySelector("#battleState"),
-    playerHp: document.querySelector("#playerHp"),
-    enemyHp: document.querySelector("#enemyHp"),
-    clock: document.querySelector("#clock")
+    machineName: document.querySelector("#machineName"),
+    raceState: document.querySelector("#raceState"),
+    playerMeter: document.querySelector("#playerMeter"),
+    rivalMeter: document.querySelector("#rivalMeter"),
+    clock: document.querySelector("#clock"),
+    resultLine: document.querySelector("#resultLine")
   };
 
-  let playerBlueprint = clone(playerPresets[0]);
-  let enemyBlueprint = clone(enemyPresets[0]);
-  let selectedSlot = "ring0";
-  let playerBot;
-  let enemyBot;
-  let projectiles = [];
-  let effects = [];
+  let playerBuild = clone(playerPresets[0]);
+  let importedRival = null;
+  let rivalBuild = clone(rivalPresets[0]);
+  let selectedSlot = "tail";
+  let playerMachine = null;
+  let rivalMachine = null;
+  let particles = [];
   let running = false;
-  let battleTime = 0;
+  let raceTime = 0;
   let lastTick = performance.now();
-  let idleSpin = 0;
-  let hitStop = 0;
   let cameraShake = 0;
-  let lastImpactAt = -1;
-  let physicsWorld;
-  let arenaWallColliders = [];
+  let dragState = null;
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -176,146 +180,198 @@
   els.scene.append(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x0d1012, 9, 18);
+  scene.fog = new THREE.Fog(0x101417, 10, 26);
 
-  const camera = new THREE.PerspectiveCamera(43, 1, 0.1, 80);
+  const camera = new THREE.PerspectiveCamera(44, 1, 0.1, 80);
   const target = new THREE.Vector3(0, 0, 0);
 
-  const hemi = new THREE.HemisphereLight(0xdffaff, 0x1f1512, 2.8);
+  const hemi = new THREE.HemisphereLight(0xe9fbff, 0x171c1e, 2.6);
   scene.add(hemi);
 
   const key = new THREE.DirectionalLight(0xffffff, 3.2);
-  key.position.set(-4, 8, 5);
+  key.position.set(-4, 9, 5);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.near = 1;
-  key.shadow.camera.far = 22;
-  key.shadow.camera.left = -9;
-  key.shadow.camera.right = 9;
-  key.shadow.camera.top = 9;
-  key.shadow.camera.bottom = -9;
+  key.shadow.camera.far = 24;
+  key.shadow.camera.left = -10;
+  key.shadow.camera.right = 10;
+  key.shadow.camera.top = 10;
+  key.shadow.camera.bottom = -10;
   scene.add(key);
 
-  const arena = makeArena();
-  scene.add(arena);
+  const track = createTrack();
+  scene.add(track.group);
 
   initUi();
-  resetBattle();
+  resetRace();
   resize();
   window.addEventListener("resize", resize);
   requestAnimationFrame(loop);
 
-  function makeBlueprint(name, slotMap) {
+  function makeBuild(name, slotMap) {
     const slots = {};
     slotDefs.forEach((slot) => {
       slots[slot.id] = slotMap[slot.id] || "empty";
     });
-    return { version: 3, name, slots };
+    return { version: 1, name, slots };
   }
 
   function initUi() {
-    renderBodyMap();
+    renderGarage();
     renderPalette();
     renderPresets();
-    enemyPresets.forEach((preset, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = preset.name;
-      els.enemySelect.append(option);
-    });
+    renderRivals();
 
-    els.bodyMap.addEventListener("click", (event) => {
+    els.garageMap.addEventListener("click", (event) => {
       const button = event.target.closest("[data-slot]");
       if (!button) return;
       selectedSlot = button.dataset.slot;
-      renderBodyMap();
+      renderGarage();
     });
 
-    els.palette.addEventListener("click", (event) => {
+    els.palette.addEventListener("pointerdown", (event) => {
       const button = event.target.closest("[data-part]");
       if (!button) return;
-      playerBlueprint.slots[selectedSlot] = button.dataset.part;
-      els.codeBox.value = encodeBlueprint(playerBlueprint);
-      renderBodyMap();
-      resetBattle();
+      beginPartDrag(button.dataset.part, event);
     });
 
     els.presets.addEventListener("click", (event) => {
       const button = event.target.closest("[data-preset]");
       if (!button) return;
-      playerBlueprint = clone(playerPresets[Number(button.dataset.preset)]);
-      selectedSlot = "ring0";
-      els.codeBox.value = encodeBlueprint(playerBlueprint);
-      renderBodyMap();
-      renderPresets();
-      resetBattle();
+      playerBuild = clone(playerPresets[Number(button.dataset.preset)]);
+      selectedSlot = "tail";
+      syncBuildUi();
+      resetRace();
     });
 
-    els.enemySelect.addEventListener("change", () => {
-      enemyBlueprint = clone(enemyPresets[Number(els.enemySelect.value)]);
-      resetBattle();
+    els.rivalSelect.addEventListener("change", () => {
+      const value = els.rivalSelect.value;
+      rivalBuild = value === "imported" && importedRival ? clone(importedRival) : clone(rivalPresets[Number(value) || 0]);
+      resetRace();
     });
 
-    els.battleBtn.addEventListener("click", () => {
-      resetBattle();
+    els.raceBtn.addEventListener("click", () => {
+      resetRace();
       running = true;
-      els.battleState.textContent = "FIGHT";
+      els.raceState.textContent = "RACING";
     });
 
-    els.resetBtn.addEventListener("click", resetBattle);
+    els.resetBtn.addEventListener("click", resetRace);
 
     els.exportBtn.addEventListener("click", () => {
-      els.codeBox.value = encodeBlueprint(playerBlueprint);
+      els.codeBox.value = encodeBuild(playerBuild);
       navigator.clipboard?.writeText(els.codeBox.value);
     });
 
     els.importBtn.addEventListener("click", () => {
       try {
-        playerBlueprint = decodeBlueprint(els.codeBox.value);
-        selectedSlot = "ring0";
-        renderBodyMap();
-        renderPresets();
-        resetBattle();
+        importedRival = decodeBuild(els.codeBox.value);
+        rivalBuild = clone(importedRival);
+        renderRivals();
+        els.rivalSelect.value = "imported";
+        resetRace();
       } catch (error) {
-        els.battleState.textContent = "BAD CODE";
+        els.raceState.textContent = "BAD CODE";
       }
     });
 
-    els.codeBox.value = encodeBlueprint(playerBlueprint);
+    els.codeBox.value = encodeBuild(playerBuild);
   }
 
-  function renderBodyMap() {
-    const readout = calcBlueprintReadout(playerBlueprint);
-    els.botName.textContent = playerBlueprint.name;
-    els.bodyMap.innerHTML = `
-      <div class="map-ring outer"></div>
-      <div class="map-ring inner"></div>
-      <div class="direction-vector thrust-vector" data-vector="thrust"></div>
-      <div class="direction-vector attack-vector" data-vector="attack"></div>
-      <div class="direction-vector guard-vector" data-vector="guard"></div>
-      <div class="balance-dot" aria-hidden="true"></div>
-      <div class="body-core">CORE</div>
+  function syncBuildUi() {
+    els.codeBox.value = encodeBuild(playerBuild);
+    renderGarage();
+    renderPresets();
+  }
+
+  function renderGarage() {
+    const stats = calcStats(playerBuild);
+    els.machineName.textContent = playerBuild.name;
+    els.garageMap.innerHTML = `
+      <div class="garage-grid"></div>
+      <div class="machine-shadow"></div>
+      <div class="machine-shell"><span></span></div>
     `;
-    applyWorkbenchVectors(readout);
+
     slotDefs.forEach((slot) => {
-      const partId = playerBlueprint.slots[slot.id] || "empty";
+      const partId = playerBuild.slots[slot.id] || "empty";
       const part = parts[partId];
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""} ${slot.vertical ? "cap-slot" : "ring-slot"}`;
+      button.className = `slot-node ${slot.id === selectedSlot ? "active" : ""} ${partId === "empty" ? "empty" : ""}`;
       button.dataset.slot = slot.id;
       button.dataset.part = partId;
       button.dataset.role = part.role;
       button.title = `${slot.label} ${part.name}`;
-      button.style.left = `${slot.mapX}%`;
-      button.style.top = `${slot.mapY}%`;
+      button.style.left = `${slot.x}%`;
+      button.style.top = `${slot.y}%`;
       button.style.color = part.color;
       button.textContent = part.mark;
-      els.bodyMap.append(button);
+      els.garageMap.append(button);
     });
-    renderSelectionReadout(readout);
-    renderBuilderTelemetry(readout);
+
+    renderSelectionReadout(stats);
+    renderTelemetry(stats);
     updatePaletteState();
+  }
+
+  function renderSelectionReadout(stats) {
+    const partId = playerBuild.slots[selectedSlot] || "empty";
+    const part = parts[partId];
+    const slot = slotDefs.find((item) => item.id === selectedSlot);
+    els.selectionReadout.innerHTML = "";
+
+    const mark = document.createElement("span");
+    mark.className = "selected-mark";
+    mark.style.color = part.color;
+    mark.textContent = part.mark;
+
+    const text = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = slot.label;
+    const name = document.createElement("strong");
+    name.textContent = part.name;
+    text.append(label, name);
+
+    const rating = document.createElement("span");
+    rating.className = "balance-chip";
+    rating.textContent = `${Math.round(stats.rating)}`;
+
+    els.selectionReadout.append(mark, text, rating);
+  }
+
+  function renderTelemetry(stats) {
+    els.builderTelemetry.innerHTML = "";
+    [
+      { mark: "↯", label: "SPD", value: stats.bars.speed, color: "#ffb84e" },
+      { mark: "●", label: "GRP", value: stats.bars.grip, color: "#7ee081" },
+      { mark: "◆", label: "STB", value: stats.bars.stability, color: "#9b8cff" },
+      { mark: "◎", label: "WALL", value: stats.bars.wall, color: "#55d8f0" },
+      { mark: "▱", label: "AIR", value: stats.bars.air, color: "#f4df62" },
+      { mark: "▰", label: "SAFE", value: stats.bars.toughness, color: "#ff6461" }
+    ].forEach((row) => {
+      const item = document.createElement("div");
+      item.className = "telemetry-row";
+      item.style.setProperty("--row-color", row.color);
+
+      const mark = document.createElement("span");
+      mark.className = "telemetry-mark";
+      mark.textContent = row.mark;
+
+      const label = document.createElement("span");
+      label.className = "telemetry-label";
+      label.textContent = row.label;
+
+      const track = document.createElement("span");
+      track.className = "telemetry-track";
+      const fill = document.createElement("span");
+      fill.style.width = `${Math.round(clamp01(row.value) * 100)}%`;
+      track.append(fill);
+
+      item.append(mark, label, track);
+      els.builderTelemetry.append(item);
+    });
   }
 
   function renderPalette() {
@@ -349,146 +405,10 @@
 
   function updatePaletteState() {
     if (!els.palette) return;
-    const selectedPart = playerBlueprint.slots[selectedSlot] || "empty";
+    const selectedPart = playerBuild.slots[selectedSlot] || "empty";
     els.palette.querySelectorAll("[data-part]").forEach((button) => {
       button.classList.toggle("active", button.dataset.part === selectedPart);
     });
-  }
-
-  function renderSelectionReadout(readout) {
-    if (!els.selectionReadout) return;
-    const selectedPartId = playerBlueprint.slots[selectedSlot] || "empty";
-    const part = parts[selectedPartId];
-    const slot = slotDefs.find((item) => item.id === selectedSlot);
-    els.selectionReadout.innerHTML = "";
-
-    const mark = document.createElement("span");
-    mark.className = "selected-mark";
-    mark.style.color = part.color;
-    mark.textContent = part.mark;
-
-    const text = document.createElement("div");
-    const label = document.createElement("span");
-    label.textContent = `${slot.vertical ? "CAP" : "RIM"} ${slot.label}`;
-    const name = document.createElement("strong");
-    name.textContent = part.name;
-    text.append(label, name);
-
-    const balance = document.createElement("span");
-    balance.className = "balance-chip";
-    balance.textContent = `${Math.round((1 - readout.balanceAmount) * 100)}`;
-
-    els.selectionReadout.append(mark, text, balance);
-  }
-
-  function renderBuilderTelemetry(readout) {
-    if (!els.builderTelemetry) return;
-    els.builderTelemetry.innerHTML = "";
-    [
-      { mark: "↯", label: "THR", value: readout.thrustScore, color: "#ffb84e" },
-      { mark: "▲", label: "HIT", value: readout.attackScore, color: "#ff6461" },
-      { mark: "▰", label: "GRD", value: readout.guardScore, color: "#7ee081" },
-      { mark: "◎", label: "BAL", value: 1 - readout.balanceAmount, color: "#f4efe6" },
-      { mark: "◆", label: "MAS", value: readout.massScore, color: "#9b8cff" }
-    ].forEach((row) => {
-      const item = document.createElement("div");
-      item.className = "telemetry-row";
-      item.style.setProperty("--row-color", row.color);
-
-      const mark = document.createElement("span");
-      mark.className = "telemetry-mark";
-      mark.textContent = row.mark;
-
-      const label = document.createElement("span");
-      label.className = "telemetry-label";
-      label.textContent = row.label;
-
-      const track = document.createElement("span");
-      track.className = "telemetry-track";
-      const fill = document.createElement("span");
-      fill.style.width = `${Math.round(clamp01(row.value) * 100)}%`;
-      track.append(fill);
-
-      item.append(mark, label, track);
-      els.builderTelemetry.append(item);
-    });
-  }
-
-  function applyWorkbenchVectors(readout) {
-    els.bodyMap.style.setProperty("--balance-x", `${(readout.balance.x * 30).toFixed(2)}%`);
-    els.bodyMap.style.setProperty("--balance-y", `${(readout.balance.y * 30).toFixed(2)}%`);
-    setDirectionVector("thrust", readout.vectors.thrust, readout.thrustScore);
-    setDirectionVector("attack", readout.vectors.attack, readout.attackScore);
-    setDirectionVector("guard", readout.vectors.guard, readout.guardScore);
-  }
-
-  function setDirectionVector(kind, vector, strength) {
-    const element = els.bodyMap.querySelector(`[data-vector="${kind}"]`);
-    if (!element) return;
-    const angle = vector.lengthSq() > 0.0001 ? Math.atan2(vector.y, vector.x) : 0;
-    element.style.setProperty("--vector-angle", `${angle}rad`);
-    element.style.setProperty("--vector-scale", `${(0.28 + clamp01(strength) * 0.92).toFixed(3)}`);
-    element.style.opacity = `${strength > 0.03 ? 0.32 + clamp01(strength) * 0.58 : 0}`;
-  }
-
-  function calcBlueprintReadout(blueprint) {
-    const balance = new THREE.Vector2();
-    const thrust = new THREE.Vector2();
-    const attack = new THREE.Vector2();
-    const guard = new THREE.Vector2();
-    let totalMass = 1.25;
-    let mountedMass = 0;
-    let eyeCount = 0;
-    let jetCount = 0;
-
-    slotDefs.forEach((slot) => {
-      const partId = blueprint.slots[slot.id] || "empty";
-      const part = parts[partId];
-      const dir = mapDirection(slot);
-      const verticalScale = slot.vertical ? 0.72 : 1;
-      totalMass += part.mass;
-
-      if (partId !== "empty") {
-        const mass = part.mass * verticalScale;
-        balance.add(dir.clone().multiplyScalar(mass));
-        mountedMass += mass;
-      }
-
-      if (partId === "eye") eyeCount += 1;
-      if (partId === "jet") {
-        jetCount += 1;
-        thrust.add(dir.clone().multiplyScalar(-1 * verticalScale));
-      }
-      if (partId === "spike") attack.add(dir.clone().multiplyScalar(1.05 * verticalScale));
-      if (partId === "cannon") attack.add(dir.clone().multiplyScalar(0.82 * verticalScale));
-      if (partId === "shield") guard.add(dir.clone().multiplyScalar(1.0 * verticalScale));
-      if (partId === "weight") guard.add(dir.clone().multiplyScalar(0.34 * verticalScale));
-    });
-
-    if (mountedMass > 0.001) balance.multiplyScalar(1 / mountedMass);
-    const balanceAmount = clamp01(balance.length() * 1.45);
-    const thrustScore = clamp01((thrust.length() + jetCount * 0.34) / 4.2);
-    const attackScore = clamp01(attack.length() / 3.8);
-    const guardScore = clamp01((guard.length() + countPart(blueprint, "shield") * 0.18) / 4.0);
-    const senseScore = clamp01(eyeCount / 3);
-    const massScore = clamp01((totalMass - 1.25) / 4.0);
-    const wobbleScore = clamp01(balanceAmount * 0.68 + Math.max(0, jetCount - 2) * 0.08 + massScore * 0.12 - senseScore * 0.08);
-
-    return {
-      balance,
-      balanceAmount,
-      thrustScore,
-      attackScore,
-      guardScore,
-      senseScore,
-      massScore,
-      wobbleScore,
-      vectors: { thrust, attack, guard }
-    };
-  }
-
-  function mapDirection(slot) {
-    return new THREE.Vector2(Math.sin(slot.angle), -Math.cos(slot.angle));
   }
 
   function renderPresets() {
@@ -498,83 +418,269 @@
       button.type = "button";
       button.dataset.preset = String(index);
       button.textContent = preset.name.toUpperCase();
-      if (preset.name === playerBlueprint.name) button.classList.add("active");
+      if (preset.name === playerBuild.name) button.classList.add("active");
       els.presets.append(button);
     });
   }
 
-  function makeArena() {
-    const group = new THREE.Group();
-    const bowl = new THREE.Mesh(
-      makeBowlGeometry(ARENA_RADIUS, 20, 144),
-      new THREE.MeshStandardMaterial({
-        color: 0x1a2326,
-        metalness: 0.16,
-        roughness: 0.68,
-        side: THREE.DoubleSide
-      })
-    );
-    bowl.receiveShadow = true;
-    group.add(bowl);
-
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(ARENA_RADIUS, 0.055, 14, 144),
-      new THREE.MeshStandardMaterial({ color: 0xffd36b, emissive: 0x5a3107, roughness: 0.4 })
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = bowlHeight(ARENA_RADIUS) + 0.03;
-    group.userData.outerRing = ring;
-    group.add(ring);
-
-    for (let r = 1; r <= 4; r += 1) {
-      const radius = (ARENA_RADIUS * r) / 5;
-      const guide = new THREE.Mesh(
-        new THREE.TorusGeometry(radius, 0.012, 8, 96),
-        new THREE.MeshStandardMaterial({ color: 0x35545b, emissive: 0x071215, roughness: 0.7 })
-      );
-      guide.rotation.x = Math.PI / 2;
-      guide.position.y = bowlHeight(radius) + 0.014;
-      group.add(guide);
+  function renderRivals() {
+    els.rivalSelect.innerHTML = "";
+    rivalPresets.forEach((preset, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = preset.name;
+      els.rivalSelect.append(option);
+    });
+    if (importedRival) {
+      const option = document.createElement("option");
+      option.value = "imported";
+      option.textContent = importedRival.name;
+      els.rivalSelect.append(option);
     }
-
-    const bumperGroup = new THREE.Group();
-    group.userData.bumperGroup = bumperGroup;
-    group.userData.wallsEnabled = true;
-    group.add(bumperGroup);
-
-    for (let i = 0; i < 24; i += 1) {
-      const angle = (Math.PI * 2 * i) / 24;
-      const post = new THREE.Mesh(
-        new THREE.BoxGeometry(0.055, 0.72, 0.055),
-        new THREE.MeshStandardMaterial({ color: 0x435157, emissive: 0x10191c })
-      );
-      post.position.set(Math.cos(angle) * ARENA_RADIUS, bowlHeight(ARENA_RADIUS) + 0.35, Math.sin(angle) * ARENA_RADIUS);
-      post.rotation.y = -angle;
-      bumperGroup.add(post);
-    }
-
-    return group;
   }
 
-  function makeBowlGeometry(radius, rings, segments) {
+  function beginPartDrag(partId, event) {
+    event.preventDefault();
+    const chip = document.createElement("div");
+    chip.className = "drag-chip";
+    chip.style.color = parts[partId].color;
+    chip.textContent = parts[partId].mark;
+    document.body.append(chip);
+    dragState = {
+      partId,
+      chip,
+      startX: event.clientX,
+      startY: event.clientY,
+      pointerId: event.pointerId
+    };
+    moveDragChip(event.clientX, event.clientY);
+    document.addEventListener("pointermove", movePartDrag);
+    document.addEventListener("pointerup", endPartDrag, { once: true });
+  }
+
+  function movePartDrag(event) {
+    if (!dragState) return;
+    moveDragChip(event.clientX, event.clientY);
+    const targetSlot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-slot]");
+    els.garageMap.querySelectorAll("[data-slot]").forEach((node) => {
+      node.classList.toggle("drop-target", node === targetSlot);
+    });
+  }
+
+  function endPartDrag(event) {
+    if (!dragState) return;
+    const distance = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
+    const targetSlot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-slot]");
+    attachPart(targetSlot?.dataset.slot || (distance < 10 ? selectedSlot : null), dragState.partId);
+    dragState.chip.remove();
+    dragState = null;
+    document.removeEventListener("pointermove", movePartDrag);
+    els.garageMap.querySelectorAll("[data-slot]").forEach((node) => node.classList.remove("drop-target"));
+  }
+
+  function moveDragChip(x, y) {
+    if (!dragState) return;
+    dragState.chip.style.left = `${x}px`;
+    dragState.chip.style.top = `${y}px`;
+  }
+
+  function attachPart(slotId, partId) {
+    if (!slotId || !parts[partId]) return;
+    playerBuild.slots[slotId] = partId;
+    playerBuild.name = "Custom Mini";
+    selectedSlot = slotId;
+    syncBuildUi();
+    resetRace();
+  }
+
+  function calcStats(build) {
+    const raw = {
+      top: 4.18,
+      accel: 2.24,
+      grip: 1,
+      stability: 0.92,
+      wall: 0.16,
+      air: 0.48,
+      boost: 0,
+      toughness: 0.24,
+      mass: 1
+    };
+
+    slotDefs.forEach((slot) => {
+      const partId = build.slots[slot.id] || "empty";
+      const part = parts[partId] || parts.empty;
+      const mul = slotMultiplier(partId, slot.id);
+      Object.entries(part.stats).forEach(([key, value]) => {
+        raw[key] += value * mul;
+      });
+    });
+
+    const topSpeed = clamp(3.05, 7.55, raw.top - Math.max(0, raw.mass - 1) * 0.16);
+    const accel = clamp(1.05, 4.2, raw.accel - Math.max(0, raw.mass - 1) * 0.2);
+    const grip = clamp(0.55, 2.85, raw.grip);
+    const stability = clamp(0.48, 2.8, raw.stability);
+    const wall = clamp(0.08, 2.55, raw.wall);
+    const air = clamp(0.18, 2.45, raw.air);
+    const boost = clamp(0, 3.3, raw.boost);
+    const toughness = clamp(0.15, 2.4, raw.toughness);
+    const mass = clamp(0.8, 4.5, raw.mass);
+    const rating = 48 + topSpeed * 5.5 + grip * 8 + stability * 6 + wall * 5 + air * 4 + boost * 5 - mass * 2.8;
+
+    return {
+      topSpeed,
+      accel,
+      grip,
+      stability,
+      wall,
+      air,
+      boost,
+      toughness,
+      mass,
+      rating: clamp(0, 99, rating),
+      bars: {
+        speed: normalize(topSpeed, 3.05, 7.55),
+        grip: normalize(grip, 0.55, 2.85),
+        stability: normalize(stability, 0.48, 2.8),
+        wall: normalize(wall, 0.08, 2.55),
+        air: normalize(air, 0.18, 2.45),
+        toughness: normalize(toughness, 0.15, 2.4)
+      }
+    };
+  }
+
+  function slotMultiplier(partId, slotId) {
+    if (partId === "booster" && slotId === "tail") return 1.35;
+    if (partId === "booster" && slotId === "nose") return 0.75;
+    if (partId === "roller" && (slotId === "left" || slotId === "right")) return 1.28;
+    if (partId === "grip" && (slotId === "left" || slotId === "right" || slotId === "core")) return 1.16;
+    if (partId === "weight" && slotId === "core") return 1.26;
+    if (partId === "wing" && slotId === "top") return 1.36;
+    if (partId === "bumper" && slotId === "nose") return 1.34;
+    return 1;
+  }
+
+  function createTrack() {
+    const points = [
+      new THREE.Vector3(-4.6, 0, -2.4),
+      new THREE.Vector3(2.8, 0, -2.45),
+      new THREE.Vector3(5.3, 0, -0.6),
+      new THREE.Vector3(4.2, 0, 2.05),
+      new THREE.Vector3(0.8, 0, 2.62),
+      new THREE.Vector3(-2.4, 0, 1.45),
+      new THREE.Vector3(-5.1, 0, 2.1),
+      new THREE.Vector3(-6.2, 0, -0.2)
+    ];
+    const curve = new THREE.CatmullRomCurve3(points, true, "centripetal", 0.82);
+    const length = curve.getLength();
+    const samples = Array.from({ length: ROAD_SEGMENTS + 1 }, (_, index) => sampleCurve(curve, index / ROAD_SEGMENTS));
+
+    const group = new THREE.Group();
+    const road = new THREE.Mesh(
+      makeRibbonGeometry(samples, TRACK_WIDTH, 0.012),
+      new THREE.MeshStandardMaterial({ color: 0x222c2f, roughness: 0.72, metalness: 0.08 })
+    );
+    road.receiveShadow = true;
+    group.add(road);
+
+    const innerRail = makeRail(samples, -TRACK_WIDTH * 0.55, 0x47545a);
+    const outerRail = makeRail(samples, TRACK_WIDTH * 0.55, 0xffd36b);
+    group.add(innerRail, outerRail);
+
+    featureZones.forEach((zone) => {
+      const strip = new THREE.Mesh(
+        makeFeatureGeometry(curve, zone.start, zone.end, TRACK_WIDTH * 0.82, 0.026),
+        new THREE.MeshStandardMaterial({
+          color: zone.color,
+          emissive: zone.color,
+          emissiveIntensity: zone.type === "boost" ? 0.22 : 0.08,
+          roughness: 0.52,
+          transparent: true,
+          opacity: zone.type === "wall" ? 0.72 : 0.88
+        })
+      );
+      strip.receiveShadow = true;
+      group.add(strip);
+    });
+
+    for (let i = 0; i < 22; i += 1) {
+      const u = i / 22;
+      const sample = sampleCurve(curve, u);
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.055, 0.42, 0.055),
+        new THREE.MeshStandardMaterial({ color: 0x637078, emissive: 0x101719 })
+      );
+      const side = i % 2 === 0 ? 1 : -1;
+      post.position.copy(sample.point.clone().add(sample.normal.clone().multiplyScalar(side * TRACK_WIDTH * 0.68)));
+      post.position.y = 0.23;
+      post.castShadow = true;
+      group.add(post);
+    }
+
+    const startSample = sampleCurve(curve, 0);
+    const startLine = new THREE.Mesh(
+      new THREE.BoxGeometry(TRACK_WIDTH * 0.95, 0.026, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0xf4efe6, emissive: 0x302a18 })
+    );
+    startLine.position.copy(startSample.point.clone().add(startSample.tangent.clone().multiplyScalar(0.06)));
+    startLine.position.y = 0.045;
+    startLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), startSample.tangent);
+    group.add(startLine);
+
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 13),
+      new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.85, metalness: 0.02 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.025;
+    ground.receiveShadow = true;
+    group.add(ground);
+
+    return { curve, group, length, samples };
+  }
+
+  function sampleCurve(curve, u) {
+    const point = curve.getPointAt(wrap01(u));
+    const tangent = curve.getTangentAt(wrap01(u)).normalize();
+    const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+    const prev = curve.getTangentAt(wrap01(u - 0.003)).normalize();
+    const next = curve.getTangentAt(wrap01(u + 0.003)).normalize();
+    const cross = prev.x * next.z - prev.z * next.x;
+    const angle = Math.acos(clamp(-1, 1, prev.dot(next)));
+    return {
+      u: wrap01(u),
+      point,
+      tangent,
+      normal,
+      curvature: angle / 0.006,
+      curveSign: Math.sign(cross) || 1,
+      feature: featureAt(wrap01(u))
+    };
+  }
+
+  function sampleTrack(progress) {
+    return sampleCurve(track.curve, (progress % track.length) / track.length);
+  }
+
+  function featureAt(u) {
+    return featureZones.find((zone) => u >= zone.start && u <= zone.end) || null;
+  }
+
+  function featurePhase(u, feature) {
+    if (!feature) return 0;
+    return clamp01((u - feature.start) / Math.max(0.001, feature.end - feature.start));
+  }
+
+  function makeRibbonGeometry(samples, width, y) {
     const vertices = [];
     const indices = [];
-    for (let r = 0; r <= rings; r += 1) {
-      const ringRadius = (radius * r) / rings;
-      const y = bowlHeight(ringRadius);
-      for (let s = 0; s < segments; s += 1) {
-        const angle = (TAU * s) / segments;
-        vertices.push(Math.cos(angle) * ringRadius, y, Math.sin(angle) * ringRadius);
-      }
-    }
-    for (let r = 0; r < rings; r += 1) {
-      for (let s = 0; s < segments; s += 1) {
-        const a = r * segments + s;
-        const b = r * segments + ((s + 1) % segments);
-        const c = (r + 1) * segments + s;
-        const d = (r + 1) * segments + ((s + 1) % segments);
-        indices.push(a, c, b, b, c, d);
-      }
+    samples.forEach((sample) => {
+      const left = sample.point.clone().add(sample.normal.clone().multiplyScalar(-width / 2));
+      const right = sample.point.clone().add(sample.normal.clone().multiplyScalar(width / 2));
+      vertices.push(left.x, y, left.z, right.x, y, right.z);
+    });
+    for (let i = 0; i < samples.length - 1; i += 1) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
@@ -583,793 +689,418 @@
     return geometry;
   }
 
-  function resetBattle() {
-    running = false;
-    battleTime = 0;
-    hitStop = 0;
-    cameraShake = 0;
-    lastImpactAt = -1;
-    clearProjectiles();
-    clearEffects();
-    if (playerBot) scene.remove(playerBot.group);
-    if (enemyBot) scene.remove(enemyBot.group);
-    resetPhysicsWorld();
-    updateArenaWalls();
-    playerBot = createBot(playerBlueprint, 0);
-    enemyBot = createBot(enemyBlueprint, 1);
-    scene.add(playerBot.group, enemyBot.group);
-    updateHud();
-    els.battleState.textContent = "READY";
+  function makeFeatureGeometry(curve, start, end, width, y) {
+    const steps = 34;
+    const samples = Array.from({ length: steps + 1 }, (_, index) => sampleCurve(curve, start + ((end - start) * index) / steps));
+    return makeRibbonGeometry(samples, width, y);
   }
 
-  function resetPhysicsWorld() {
-    physicsWorld = new RAPIER.World({ x: 0, y: 0, z: 0 });
-    physicsWorld.timestep = 1 / 90;
-    physicsWorld.numSolverIterations = 12;
-    physicsWorld.numAdditionalFrictionIterations = 8;
-    arenaWallColliders = createArenaWallColliders();
-  }
-
-  function createArenaWallColliders() {
-    const colliders = [];
-    for (let i = 0; i < 32; i += 1) {
-      const angle = (TAU * i) / 32;
-      const normal = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
-      const rotation = quaternionFromTo(new THREE.Vector3(1, 0, 0), normal);
-      const desc = RAPIER.ColliderDesc.cuboid(0.08, 0.78, 0.5)
-        .setTranslation(normal.x * 4.98, 0, normal.z * 4.98)
-        .setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w })
-        .setFriction(0.08)
-        .setRestitution(0.82);
-      colliders.push(physicsWorld.createCollider(desc));
-    }
-    return colliders;
-  }
-
-  function createBot(blueprint, team) {
-    const stats = calcStats(blueprint);
-    const bot = {
-      team,
-      blueprint: clone(blueprint),
-      stats,
-      hp: stats.maxHp,
-      pos: new THREE.Vector2(team === 0 ? -2.1 : 2.1, team === 0 ? -0.42 : 0.42),
-      vel: new THREE.Vector2(team === 0 ? 1.15 : -1.15, team === 0 ? 0.24 : -0.24),
-      yaw: team === 0 ? 0 : Math.PI,
-      omega: team === 0 ? 1.1 : -1.1,
-      cooldowns: {},
-      active: new Set(),
-      out: false,
-      outScore: 0,
-      outTime: null,
-      rimTime: 0,
-      body: null,
-      colliders: [],
-      group: new THREE.Group(),
-      core: null,
-      partGroups: {}
-    };
-    bot.group.userData.bot = bot;
-    buildBotMesh(bot);
-    bot.body = createBotBody(bot);
-    syncBotMesh(bot, 0);
-    return bot;
-  }
-
-  function createBotBody(bot) {
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(bot.pos.x, 0, bot.pos.y)
-      .setLinvel(bot.vel.x, 0, bot.vel.y)
-      .setAngvel({ x: 0, y: bot.omega, z: 0 })
-      .enabledTranslations(true, false, true)
-      .enabledRotations(false, true, false)
-      .setLinearDamping(0.2)
-      .setAngularDamping(0.42)
-      .setCcdEnabled(true)
-      .setCanSleep(false);
-    const body = physicsWorld.createRigidBody(bodyDesc);
-    body.setAdditionalSolverIterations(8);
-
-    bot.colliders.push(
-      physicsWorld.createCollider(
-        RAPIER.ColliderDesc.ball(0.72).setMass(1.25).setFriction(0.16).setRestitution(0.58).setContactSkin(0.012),
-        body
-      )
+  function makeRail(samples, offset, color) {
+    const points = samples.map((sample) => sample.point.clone().add(sample.normal.clone().multiplyScalar(offset)).setY(0.08));
+    const curve = new THREE.CatmullRomCurve3(points, true, "centripetal", 0.7);
+    return new THREE.Mesh(
+      new THREE.TubeGeometry(curve, ROAD_SEGMENTS, 0.035, 8, true),
+      new THREE.MeshStandardMaterial({ color, emissive: color === 0xffd36b ? 0x4a2a08 : 0x101719, roughness: 0.42 })
     );
+  }
 
-    slotDefs.forEach((slot) => {
-      const partId = bot.blueprint.slots[slot.id] || "empty";
-      if (partId === "empty") return;
-      const colliderDesc = createPartColliderDesc(partId, slot);
-      if (colliderDesc) bot.colliders.push(physicsWorld.createCollider(colliderDesc, body));
+  function resetRace() {
+    running = false;
+    raceTime = 0;
+    cameraShake = 0;
+    clearParticles();
+    if (playerMachine) scene.remove(playerMachine.group);
+    if (rivalMachine) scene.remove(rivalMachine.group);
+    playerMachine = createMachine(playerBuild, 0, -0.32);
+    rivalMachine = createMachine(rivalBuild, 1, 0.32);
+    scene.add(playerMachine.group, rivalMachine.group);
+    syncMachineMesh(playerMachine, 0);
+    syncMachineMesh(rivalMachine, 0);
+    updateHud();
+    els.raceState.textContent = "READY";
+  }
+
+  function createMachine(build, team, lane) {
+    const stats = calcStats(build);
+    const group = buildMachineMesh(build, team);
+    return {
+      team,
+      build: clone(build),
+      stats,
+      group,
+      flames: [],
+      state: {
+        lane,
+        progress: 0,
+        speed: 0,
+        time: 0,
+        finished: false,
+        finishTime: null,
+        outCount: 0,
+        crash: 0,
+        boostTimer: 0,
+        boostCooldown: team === 0 ? 0.15 : 0.35,
+        airHeight: 0
+      }
+    };
+  }
+
+  function buildMachineMesh(build, team) {
+    const group = new THREE.Group();
+    const baseColor = team === 0 ? 0x55d8f0 : 0xff6461;
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: baseColor,
+      roughness: 0.42,
+      metalness: 0.22,
+      emissive: team === 0 ? 0x0a3540 : 0x401010
+    });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.28, 1.18), bodyMaterial);
+    body.position.y = 0.25;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.28), bodyMaterial);
+    nose.position.set(0, 0.27, 0.72);
+    nose.castShadow = true;
+    group.add(nose);
+
+    const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x101417, roughness: 0.6, metalness: 0.08 });
+    [-0.48, 0.48].forEach((x) => {
+      [-0.34, 0.38].forEach((z) => {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.13, 18), wheelMaterial);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(x, 0.12, z);
+        wheel.castShadow = true;
+        group.add(wheel);
+      });
     });
 
-    body.recomputeMassPropertiesFromColliders();
-    return body;
-  }
-
-  function createPartColliderDesc(partId, slot) {
-    const part = parts[partId];
-    const normal = slotNormal(slot);
-    const colliderMass = Math.max(0.02, part.mass * (partId === "weight" ? 2.4 : 1.45));
-    let desc;
-    let offsetScale = 0.96;
-    let rotation = quaternionFromTo(new THREE.Vector3(0, 1, 0), normal);
-
-    if (partId === "eye") {
-      desc = RAPIER.ColliderDesc.ball(0.18).setRestitution(0.72).setFriction(0.1);
-      offsetScale = 0.9;
-    } else if (partId === "jet") {
-      desc = RAPIER.ColliderDesc.cone(0.24, 0.18).setRestitution(0.68).setFriction(0.08);
-      offsetScale = 0.98;
-      rotation = quaternionFromTo(new THREE.Vector3(0, 1, 0), normal.clone().negate());
-    } else if (partId === "spike") {
-      desc = RAPIER.ColliderDesc.cone(0.36, 0.19).setRestitution(0.92).setFriction(0.05);
-      offsetScale = 1.08;
-    } else if (partId === "cannon") {
-      desc = RAPIER.ColliderDesc.capsule(0.32, 0.1).setRestitution(0.72).setFriction(0.08);
-      offsetScale = 1.06;
-    } else if (partId === "shield") {
-      desc = RAPIER.ColliderDesc.cuboid(0.05, 0.36, 0.48).setRestitution(0.28).setFriction(0.54);
-      offsetScale = 0.93;
-      rotation = quaternionFromTo(new THREE.Vector3(1, 0, 0), normal);
-    } else if (partId === "weight") {
-      desc = RAPIER.ColliderDesc.ball(0.31).setRestitution(0.38).setFriction(0.32);
-      offsetScale = 0.85;
-    }
-
-    if (!desc) return null;
-    const offset = normal.clone().multiplyScalar(offsetScale);
-    desc.setTranslation(offset.x, offset.y * 0.82, offset.z);
-    desc.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w });
-    desc.setMass(colliderMass);
-    desc.setContactSkin(0.01);
-    return desc;
-  }
-
-  function calcStats(blueprint) {
-    let mass = 1.25;
-    let armor = 1;
-    let maxHp = 150;
     slotDefs.forEach((slot) => {
-      const partId = blueprint.slots[slot.id] || "empty";
-      mass += parts[partId].mass;
-      if (partId === "shield") maxHp += 13;
-      if (partId === "weight") {
-        maxHp += 8;
-        armor += 0.04;
+      const partId = build.slots[slot.id] || "empty";
+      if (partId === "empty") return;
+      const partGroup = createPartMesh(partId, slot);
+      group.add(partGroup);
+    });
+
+    group.traverse((child) => {
+      if (child.userData.flame) {
+        child.visible = false;
+        group.userData.flames = group.userData.flames || [];
+        group.userData.flames.push(child);
       }
     });
-    return { mass, inertia: mass * 0.92, maxHp, armor };
+    return group;
   }
 
-  function buildBotMesh(bot) {
-    const teamColor = bot.team === 0 ? 0x55d8f0 : 0xff6461;
-    const coreMaterial = new THREE.MeshStandardMaterial({
-      color: teamColor,
-      metalness: 0.2,
-      roughness: 0.45,
-      emissive: bot.team === 0 ? 0x10343d : 0x3d1010
-    });
-    bot.core = new THREE.Mesh(new THREE.SphereGeometry(0.72, 40, 24), coreMaterial);
-    bot.core.castShadow = true;
-    bot.core.receiveShadow = true;
-    bot.group.add(bot.core);
-
-    const seam = new THREE.Mesh(
-      new THREE.TorusGeometry(0.73, 0.012, 8, 80),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.42 })
-    );
-    seam.rotation.x = Math.PI / 2;
-    bot.group.add(seam);
-
-    slotDefs.forEach((slot) => {
-      const partId = bot.blueprint.slots[slot.id] || "empty";
-      if (partId === "empty") return;
-      const partGroup = createPartGroup(partId, slot);
-      bot.partGroups[slot.id] = partGroup;
-      bot.group.add(partGroup);
-    });
-  }
-
-  function createPartGroup(partId, slot) {
+  function createPartMesh(partId, slot) {
     const part = parts[partId];
     const group = new THREE.Group();
-    group.userData.partId = partId;
-    const normal = slotNormal(slot);
-    group.position.copy(normal.clone().multiplyScalar(0.72));
+    const mount = new THREE.Vector3(...slot.mount);
+    group.position.copy(mount);
+    group.scale.setScalar(slot.scale || 1);
 
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(part.color),
-      roughness: 0.45,
+      roughness: 0.4,
       metalness: 0.22,
-      emissive: new THREE.Color(part.color).multiplyScalar(0.18)
+      emissive: new THREE.Color(part.color).multiplyScalar(0.14)
     });
 
-    if (partId === "eye") {
-      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.18, 18, 12), material);
-      lens.position.copy(normal.clone().multiplyScalar(0.16));
-      lens.castShadow = true;
-      group.add(lens);
-    }
-
-    if (partId === "jet") {
-      const nozzle = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.46, 18), material);
-      alignY(nozzle, normal.clone().negate());
-      nozzle.position.copy(normal.clone().multiplyScalar(0.08));
-      nozzle.castShadow = true;
-      group.add(nozzle);
+    if (partId === "booster") {
+      const booster = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.4, 18), material);
+      booster.rotation.x = Math.PI / 2;
+      booster.castShadow = true;
+      group.add(booster);
 
       const flame = new THREE.Mesh(
-        new THREE.ConeGeometry(0.15, 0.54, 16),
-        new THREE.MeshStandardMaterial({ color: 0xfff2a0, emissive: 0xff7a1a, transparent: true, opacity: 0.82 })
+        new THREE.ConeGeometry(0.12, 0.42, 18),
+        new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.85 })
       );
-      alignY(flame, normal);
-      flame.position.copy(normal.clone().multiplyScalar(0.42));
-      flame.visible = false;
+      flame.rotation.x = -Math.PI / 2;
+      flame.position.z = -0.34;
       flame.userData.flame = true;
       group.add(flame);
     }
 
-    if (partId === "spike") {
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.64, 22), material);
-      alignY(spike, normal);
-      spike.position.copy(normal.clone().multiplyScalar(0.28));
-      spike.castShadow = true;
-      group.add(spike);
+    if (partId === "roller") {
+      const roller = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.035, 8, 24), material);
+      roller.rotation.y = Math.PI / 2;
+      roller.castShadow = true;
+      group.add(roller);
     }
 
-    if (partId === "cannon") {
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.72, 18), material);
-      alignY(barrel, normal);
-      barrel.position.copy(normal.clone().multiplyScalar(0.28));
-      barrel.castShadow = true;
-      group.add(barrel);
-    }
-
-    if (partId === "shield") {
-      const shield = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.48, 0.68), material);
-      alignX(shield, normal);
-      shield.position.copy(normal.clone().multiplyScalar(0.22));
-      shield.castShadow = true;
-      group.add(shield);
+    if (partId === "grip") {
+      const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.18, 20), material);
+      tire.rotation.z = Math.PI / 2;
+      tire.castShadow = true;
+      group.add(tire);
     }
 
     if (partId === "weight") {
-      const weight = new THREE.Mesh(new THREE.OctahedronGeometry(0.25), material);
-      weight.position.copy(normal.clone().multiplyScalar(0.16));
+      const weight = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), material);
       weight.castShadow = true;
       group.add(weight);
+    }
+
+    if (partId === "wing") {
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.055, 0.22), material);
+      wing.position.y = 0.08;
+      wing.castShadow = true;
+      group.add(wing);
+    }
+
+    if (partId === "bumper") {
+      const bumper = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.12, 0.14), material);
+      bumper.castShadow = true;
+      group.add(bumper);
     }
 
     return group;
   }
 
-  function alignY(mesh, direction) {
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-  }
-
-  function alignX(mesh, direction) {
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction.normalize());
-  }
-
   function loop(now) {
-    const rawDt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
+    const dt = Math.min(0.033, (now - lastTick) / 1000 || 0.016);
     lastTick = now;
-    idleSpin += rawDt;
-    const simDt = hitStop > 0 ? Math.min(rawDt * 0.18, 0.006) : rawDt;
-    hitStop = Math.max(0, hitStop - rawDt);
-    cameraShake = Math.max(0, cameraShake - rawDt * 2.25);
+    cameraShake = Math.max(0, cameraShake - dt * 2.6);
 
-    if (running) updateBattle(simDt);
-    else {
-      playerBot.yaw += rawDt * 0.18;
-      enemyBot.yaw -= rawDt * 0.18;
-    }
-
-    syncBotMesh(playerBot, simDt);
-    syncBotMesh(enemyBot, simDt);
-    updateProjectilesVisuals();
-    updateEffects(rawDt);
-    updateCamera(rawDt);
+    if (running) updateRace(dt);
+    syncMachineMesh(playerMachine, dt);
+    syncMachineMesh(rivalMachine, dt);
+    updateParticles(dt);
+    updateCamera(dt);
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
 
-  function updateBattle(dt) {
-    battleTime += dt;
-    updateArenaWalls();
-    playerBot.active.clear();
-    enemyBot.active.clear();
-    updateBot(playerBot, enemyBot, dt);
-    updateBot(enemyBot, playerBot, dt);
-    applyArenaForces(playerBot, dt);
-    applyArenaForces(enemyBot, dt);
-    stepPhysics(dt);
-    updateProjectiles(dt);
-    handleBotCollision(dt);
+  function updateRace(dt) {
+    raceTime += dt;
+    updateMachine(playerMachine, dt);
+    updateMachine(rivalMachine, dt);
     updateHud();
 
-    if (playerBot.out || enemyBot.out || playerBot.hp <= 0 || enemyBot.hp <= 0 || battleTime >= 45) {
+    if ((playerMachine.state.finished && rivalMachine.state.finished) || raceTime >= MAX_RACE_TIME) {
       running = false;
-      const p = scoreBot(playerBot);
-      const e = scoreBot(enemyBot);
-      els.battleState.textContent = p === e ? "DRAW" : p > e ? "WIN" : "LOSE";
+      const result = compareMachines();
+      els.raceState.textContent = result === 0 ? "DRAW" : result < 0 ? "WIN" : "LOSE";
+      updateHud();
     }
   }
 
-  function updateArenaWalls() {
-    const enabled = battleTime < 13.5;
-    arenaWallColliders.forEach((collider) => {
-      if (collider.isEnabled() !== enabled) collider.setEnabled(enabled);
-    });
-    if (arena.userData.wallsEnabled !== enabled) {
-      arena.userData.wallsEnabled = enabled;
-      if (!enabled && running) {
-        triggerImpact(0.7);
-        spawnImpactEffect(new THREE.Vector2(0, 0), { color: 0xffd36b, power: 0.72, sparks: 18 });
-      }
+  function updateMachine(machine, dt) {
+    const state = machine.state;
+    if (state.finished) return;
+    state.time += dt;
+    state.boostCooldown = Math.max(0, state.boostCooldown - dt);
+    state.boostTimer = Math.max(0, state.boostTimer - dt);
+
+    const sample = sampleTrack(state.progress);
+    const feature = sample.feature;
+    let top = machine.stats.topSpeed;
+
+    if (feature?.type === "rough") {
+      top -= Math.max(0.12, 0.95 - machine.stats.mass * 0.1 - machine.stats.toughness * 0.24);
+      state.speed *= 1 - dt * Math.max(0.04, 0.32 - machine.stats.toughness * 0.08);
     }
-    if (arena.userData.bumperGroup) arena.userData.bumperGroup.visible = enabled;
-    if (arena.userData.outerRing?.material?.emissive) {
-      arena.userData.outerRing.material.emissive.setHex(enabled ? 0x5a3107 : 0xff6a1a);
+
+    if (feature?.type === "wall") {
+      top -= Math.max(0, 0.42 - machine.stats.wall * 0.12);
     }
-  }
 
-  function updateBot(bot, opponent, dt) {
-    slotDefs.forEach((slot) => {
-      bot.cooldowns[slot.id] = Math.max(0, (bot.cooldowns[slot.id] || 0) - dt);
-    });
+    if (feature?.type === "boost" && machine.stats.boost > 0.05 && state.boostCooldown <= 0 && state.crash <= 0) {
+      state.boostTimer = 0.72;
+      state.boostCooldown = 2.5;
+      spawnTrackSparks(machine, 0xffb84e, 10);
+    }
 
-    const toEnemy = angleTo(bot.pos, opponent.pos);
-    const distance = bot.pos.distanceTo(opponent.pos);
-    const eyeCount = countPart(bot.blueprint, "eye");
+    if (state.boostTimer > 0) {
+      top += machine.stats.boost * 0.92;
+      state.speed += machine.stats.boost * 2.05 * dt;
+    }
 
-    slotDefs.forEach((slot) => {
-      const partId = bot.blueprint.slots[slot.id];
-      const mountAngle = bot.yaw + slot.angle;
-      const aimDiff = wrapAngle(toEnemy - mountAngle);
-
-      if (partId === "eye") {
-        addBotSpin(bot, aimDiff * 4.2 * dt / bot.stats.inertia);
-        if (Math.abs(aimDiff) < 0.42) bot.active.add(slot.id);
-      }
-
-      if (partId === "jet") {
-        const pulse = 0.85 + Math.sin(battleTime * 7.5 + slot.angle * 2) * 0.16;
-        const mountPower = 1 - Math.abs(slot.vertical || 0) * 0.3;
-        const forceAngle = mountAngle + Math.PI;
-        applyForce(bot, forceAngle, 3.35 * pulse * mountPower, mountAngle, dt);
-        bot.active.add(slot.id);
-      }
-
-      if (partId === "shield" && Math.abs(aimDiff) < 0.9) {
-        bot.active.add(slot.id);
-      }
-
-      if (partId === "cannon") {
-        const cone = eyeCount > 0 ? 0.4 : 0.28;
-        if (distance < 6.0 && Math.abs(aimDiff) < cone && bot.cooldowns[slot.id] <= 0) {
-          fireProjectile(bot, slot, mountAngle);
-          bot.cooldowns[slot.id] = 1.05;
-          bot.active.add(slot.id);
-        }
-      }
-    });
-
-    if (eyeCount === 0) {
-      addBotSpin(bot, wrapAngle(toEnemy - bot.yaw) * 0.22 * dt);
+    if (state.crash > 0) {
+      state.crash = Math.max(0, state.crash - dt);
+      state.speed = Math.max(0.6, state.speed - (2.4 - machine.stats.toughness * 0.35) * dt);
     } else {
-      const seek = vectorFromAngle(toEnemy).multiplyScalar((0.18 + eyeCount * 0.04) * dt);
-      addBotVelocity(bot, seek);
+      state.speed += (top - state.speed) * Math.min(1, dt * machine.stats.accel * 0.38);
+      applyCornering(machine, sample, dt);
+      applyJump(machine, sample, dt);
+    }
+
+    state.progress += Math.max(0, state.speed) * dt;
+    if (state.progress >= track.length * LAPS) {
+      state.finished = true;
+      state.finishTime = state.time;
+      state.speed = 0;
+      spawnTrackSparks(machine, machine.team === 0 ? 0x55d8f0 : 0xff6461, 16);
     }
   }
 
-  function applyForce(bot, forceAngle, power, mountAngle, dt) {
-    const force = vectorFromAngle(forceAngle).multiplyScalar(power);
-    const r = vectorFromAngle(mountAngle).multiplyScalar(0.72);
-    if (bot.body && !bot.out) {
-      bot.body.addForceAtPoint(
-        { x: force.x, y: 0, z: force.y },
-        { x: bot.pos.x + r.x, y: 0, z: bot.pos.y + r.y },
-        true
-      );
+  function applyCornering(machine, sample, dt) {
+    const state = machine.state;
+    const load = state.speed * state.speed * Math.abs(sample.curvature) * 0.062;
+    const hold = machine.stats.grip * 0.58 + machine.stats.stability * 0.34 + machine.stats.wall * 0.12;
+    const slide = Math.max(0, load - hold);
+    state.lane += sample.curveSign * slide * dt * (0.42 + state.speed * 0.055);
+    state.lane *= Math.max(0.1, 1 - dt * (1.15 + machine.stats.grip * 0.62 + machine.stats.wall * 0.7));
+
+    if (Math.abs(state.lane) > TRACK_WIDTH * 0.52) {
+      courseOut(machine, sample, 0.75 + slide * 0.35);
+    }
+  }
+
+  function applyJump(machine, sample, dt) {
+    const state = machine.state;
+    const feature = sample.feature;
+    if (feature?.type !== "jump") {
+      state.airHeight += (0 - state.airHeight) * Math.min(1, dt * 8);
       return;
     }
-    bot.vel.add(force.clone().multiplyScalar(dt / bot.stats.mass));
-    addBotSpin(bot, ((r.x * force.y - r.y * force.x) * dt) / bot.stats.inertia);
-  }
-
-  function applyArenaForces(bot, dt) {
-    if (bot.out || !bot.body) return;
-
-    const radius = bot.pos.length();
-    if (radius > 0.02) {
-      const towardCenter = bot.pos.clone().normalize().multiplyScalar(-(0.24 + radius * 0.12) * bot.stats.mass);
-      bot.body.addForce({ x: towardCenter.x, y: 0, z: towardCenter.y }, true);
-    }
-
-    const tilt = Math.min(1.55, Math.max(0, battleTime - 10) * 0.055);
-    if (tilt > 0) {
-      const tiltAngle = battleTime * 0.72;
-      const tiltForce = { x: Math.cos(tiltAngle) * tilt * bot.stats.mass, y: 0, z: Math.sin(tiltAngle) * tilt * bot.stats.mass };
-      bot.body.addForce(tiltForce, true);
-    }
-
-    const dangerRadius = RIM_RADIUS - Math.min(0.65, Math.max(0, battleTime - 16) * 0.035);
-    const wallsActive = battleTime < 13.5;
-    if (radius > dangerRadius) {
-      const normal = bot.pos.clone().normalize();
-      const outward = bot.vel.dot(normal);
-      const slip = Math.max(0, radius - dangerRadius);
-      if (!wallsActive) {
-        bot.rimTime += (1 + slip * 2.2 + Math.max(0, outward) * 0.5) * dt;
-      }
-      bot.hp -= (3.6 + slip * 6 + Math.max(0, outward) * 4.1) * dt;
-      if (outward > 0.05) {
-        const rimForce = normal.multiplyScalar((0.18 + slip * 1.0) * bot.stats.mass);
-        bot.body.addForce({ x: rimForce.x, y: 0, z: rimForce.y }, true);
-      }
-      addBotSpin(bot, (bot.team === 0 ? -1 : 1) * 0.35 * dt);
-    } else {
-      bot.rimTime = Math.max(0, bot.rimTime - dt * 2.2);
-    }
-
-    if ((wallsActive && radius > ARENA_RADIUS + 0.65) || (!wallsActive && (radius > KO_RADIUS || bot.rimTime > 1.8))) {
-      knockOutBot(bot);
+    const phase = featurePhase(sample.u, feature);
+    state.airHeight = Math.sin(phase * Math.PI) * Math.min(0.68, state.speed * 0.085);
+    const safeSpeed = 4.55 + machine.stats.air * 0.64 + machine.stats.stability * 0.24;
+    const jumpRisk = state.speed - safeSpeed;
+    if (jumpRisk > 0.88 && phase > 0.35 && phase < 0.68) {
+      courseOut(machine, sample, 0.84 + jumpRisk * 0.12);
     }
   }
 
-  function stepPhysics(dt) {
-    const steps = Math.min(5, Math.max(1, Math.ceil(dt / (1 / 90))));
-    const stepDt = dt / steps;
-    for (let i = 0; i < steps; i += 1) {
-      physicsWorld.timestep = stepDt;
-      physicsWorld.step();
-    }
-    syncBotStateFromBody(playerBot, dt);
-    syncBotStateFromBody(enemyBot, dt);
+  function courseOut(machine, sample, power) {
+    const state = machine.state;
+    if (state.crash > 0.15) return;
+    state.outCount += 1;
+    state.crash = 0.92;
+    state.speed *= clamp(0.3, 0.62, 0.48 + machine.stats.toughness * 0.05);
+    state.lane = clamp(-TRACK_WIDTH * 0.28, TRACK_WIDTH * 0.28, state.lane * 0.36);
+    cameraShake = Math.max(cameraShake, 0.28 + power * 0.52);
+    spawnWorldSparks(sample.point.clone().add(sample.normal.clone().multiplyScalar(state.lane)), machine.team === 0 ? 0x55d8f0 : 0xff6461, 10 + Math.round(power * 8));
   }
 
-  function syncBotStateFromBody(bot, dt) {
-    if (!bot.body) return;
-    const translation = bot.body.translation();
-    const velocity = bot.body.linvel();
-    const speed = Math.hypot(velocity.x, velocity.z);
-    if (speed > 7.4) {
-      const scale = 7.4 / speed;
-      bot.body.setLinvel({ x: velocity.x * scale, y: 0, z: velocity.z * scale }, true);
-      velocity.x *= scale;
-      velocity.z *= scale;
-    } else if (Math.abs(velocity.y) > 0.0001) {
-      bot.body.setLinvel({ x: velocity.x, y: 0, z: velocity.z }, true);
-    }
+  function syncMachineMesh(machine, dt) {
+    if (!machine) return;
+    const state = machine.state;
+    const sample = sampleTrack(Math.min(state.progress, track.length * LAPS - 0.001));
+    const position = sample.point.clone().add(sample.normal.clone().multiplyScalar(state.lane));
+    position.y = 0.16 + state.airHeight;
+    machine.group.position.copy(position);
+    const yaw = Math.atan2(sample.tangent.x, sample.tangent.z);
+    machine.group.rotation.set(0, yaw, -state.lane * 0.08 - sample.curveSign * Math.min(0.22, Math.abs(sample.curvature) * 0.012));
 
-    if (Math.abs(translation.y) > 0.0001) {
-      bot.body.setTranslation({ x: translation.x, y: 0, z: translation.z }, true);
-    }
-
-    bot.pos.set(translation.x, translation.z);
-    bot.vel.set(velocity.x, velocity.z);
-    bot.omega = bot.body.angvel().y;
-    bot.yaw = yawFromQuaternion(bot.body.rotation());
-    bot.hp = Math.max(0, bot.hp);
-  }
-
-  function addBotVelocity(bot, delta) {
-    bot.vel.add(delta);
-    if (bot.body && !bot.out) {
-      const velocity = bot.body.linvel();
-      bot.body.setLinvel({ x: velocity.x + delta.x, y: 0, z: velocity.z + delta.y }, true);
-    }
-  }
-
-  function addBotSpin(bot, delta) {
-    bot.omega += delta;
-    if (bot.body && !bot.out) {
-      const angular = bot.body.angvel();
-      bot.body.setAngvel({ x: 0, y: angular.y + delta, z: 0 }, true);
-    }
-  }
-
-  function knockOutBot(bot) {
-    if (bot.out) return;
-    bot.out = true;
-    bot.outTime = battleTime;
-    bot.outScore = Math.max(0, bot.hp) - bot.pos.length() * 3 - bot.rimTime * 8;
-    bot.hp = 0;
-    const exitNormal = bot.pos.length() > 0.01 ? bot.pos.clone().normalize() : new THREE.Vector2(bot.team === 0 ? -1 : 1, 0);
-    spawnImpactEffect(exitNormal.clone().multiplyScalar(ARENA_RADIUS), {
-      color: bot.team === 0 ? 0x55d8f0 : 0xff6461,
-      power: 1.08,
-      sparks: 24
-    });
-    triggerImpact(1.05);
-    bot.pos.copy(exitNormal.clone().multiplyScalar(ARENA_RADIUS + 0.28));
-    bot.vel.add(exitNormal.clone().multiplyScalar(1.7));
-    bot.omega += bot.team === 0 ? -2.6 : 2.6;
-    if (bot.body) {
-      bot.colliders.forEach((collider) => collider.setEnabled(false));
-      bot.body.setTranslation({ x: bot.pos.x, y: 0, z: bot.pos.y }, true);
-      bot.body.setLinvel({ x: bot.vel.x, y: 0, z: bot.vel.y }, true);
-      bot.body.setAngvel({ x: 0, y: bot.omega, z: 0 }, true);
-    }
-  }
-
-  function fireProjectile(bot, slot, mountAngle) {
-    const normal = vectorFromAngle(mountAngle);
-    const pos = bot.pos.clone().add(normal.clone().multiplyScalar(0.95));
-    const vel = normal.clone().multiplyScalar(6.2).add(bot.vel.clone().multiplyScalar(0.45));
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 12, 8),
-      new THREE.MeshStandardMaterial({
-        color: bot.team === 0 ? 0x55d8f0 : 0xff6461,
-        emissive: bot.team === 0 ? 0x1bc7ee : 0xff2525
-      })
-    );
-    mesh.castShadow = true;
-    scene.add(mesh);
-    projectiles.push({ team: bot.team, pos, vel, life: 1.35, damage: 13, mesh });
-  }
-
-  function updateProjectiles(dt) {
-    projectiles.forEach((shot) => {
-      shot.pos.add(shot.vel.clone().multiplyScalar(dt));
-      shot.life -= dt;
-      const targetBot = shot.team === 0 ? enemyBot : playerBot;
-      if (shot.pos.distanceTo(targetBot.pos) < 0.76 && targetBot.hp > 0) {
-        damageBot(targetBot, shot.damage, angleTo(targetBot.pos, shot.pos));
-        addBotVelocity(targetBot, shot.vel.clone().normalize().multiplyScalar(0.55));
-        spawnImpactEffect(shot.pos.clone(), {
-          color: shot.team === 0 ? 0x55d8f0 : 0xff6461,
-          power: 0.42,
-          sparks: 9
-        });
-        triggerImpact(0.34);
-        shot.life = 0;
-      }
-      if (shot.pos.length() > 5.7) shot.life = 0;
+    machine.group.userData.flames?.forEach((flame) => {
+      flame.visible = state.boostTimer > 0.02;
+      flame.scale.setScalar(0.85 + Math.sin(state.time * 28) * 0.12);
     });
 
-    projectiles = projectiles.filter((shot) => {
-      if (shot.life > 0) return true;
-      scene.remove(shot.mesh);
-      shot.mesh.geometry.dispose();
-      shot.mesh.material.dispose();
+    machine.group.traverse((child) => {
+      if (child.geometry?.type === "CylinderGeometry") child.rotation.x += state.speed * dt * 2.4;
+    });
+  }
+
+  function updateHud() {
+    const targetDistance = track.length * LAPS;
+    const p = Math.min(1, playerMachine.state.progress / targetDistance);
+    const r = Math.min(1, rivalMachine.state.progress / targetDistance);
+    els.playerMeter.style.width = `${p * 100}%`;
+    els.rivalMeter.style.width = `${r * 100}%`;
+    els.clock.textContent = raceTime.toFixed(1);
+    els.resultLine.textContent = `${formatTime(playerMachine.state.finishTime || playerMachine.state.time)} / ${formatTime(rivalMachine.state.finishTime || rivalMachine.state.time)}`;
+
+    window.AsyncRacerDebug = {
+      time: raceTime,
+      trackLength: track.length,
+      player: machineDebug(playerMachine),
+      rival: machineDebug(rivalMachine)
+    };
+  }
+
+  function machineDebug(machine) {
+    return {
+      progress: machine.state.progress,
+      speed: machine.state.speed,
+      outCount: machine.state.outCount,
+      finished: machine.state.finished,
+      finishTime: machine.state.finishTime,
+      stats: machine.stats
+    };
+  }
+
+  function compareMachines() {
+    const p = raceScore(playerMachine);
+    const r = raceScore(rivalMachine);
+    if (Math.abs(p - r) < 0.03) return 0;
+    return p - r;
+  }
+
+  function raceScore(machine) {
+    if (machine.state.finishTime != null) return machine.state.finishTime + machine.state.outCount * 0.24;
+    const remaining = track.length * LAPS - machine.state.progress;
+    return MAX_RACE_TIME + remaining * 0.18 + machine.state.outCount * 0.6;
+  }
+
+  function spawnTrackSparks(machine, color, count) {
+    const sample = sampleTrack(machine.state.progress);
+    spawnWorldSparks(sample.point.clone().add(sample.normal.clone().multiplyScalar(machine.state.lane)), color, count);
+  }
+
+  function spawnWorldSparks(origin, color, count) {
+    for (let i = 0; i < count; i += 1) {
+      const angle = (TAU * i) / count;
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025, 6, 4),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+      );
+      mesh.position.copy(origin);
+      mesh.position.y += 0.24;
+      mesh.userData.velocity = new THREE.Vector3(Math.cos(angle) * (0.45 + i * 0.015), 0.45 + (i % 3) * 0.09, Math.sin(angle) * (0.45 + i * 0.015));
+      mesh.userData.life = 0;
+      mesh.userData.duration = 0.45;
+      scene.add(mesh);
+      particles.push(mesh);
+    }
+  }
+
+  function updateParticles(dt) {
+    particles.forEach((particle) => {
+      particle.userData.life += dt;
+      particle.position.addScaledVector(particle.userData.velocity, dt);
+      particle.userData.velocity.y -= 2.6 * dt;
+      const t = particle.userData.life / particle.userData.duration;
+      particle.material.opacity = Math.max(0, 1 - t);
+      particle.scale.setScalar(1 + t * 0.8);
+    });
+    particles = particles.filter((particle) => {
+      if (particle.userData.life < particle.userData.duration) return true;
+      scene.remove(particle);
+      particle.geometry.dispose();
+      particle.material.dispose();
       return false;
     });
   }
 
-  function handleBotCollision(dt) {
-    const delta = enemyBot.pos.clone().sub(playerBot.pos);
-    const distance = Math.max(delta.length(), 0.0001);
-    if (distance >= 1.72) return;
-
-    const normal = delta.multiplyScalar(1 / distance);
-    const relVelocity = enemyBot.vel.clone().sub(playerBot.vel);
-    const impactSpeed = Math.max(0, Math.abs(relVelocity.dot(normal)) + (Math.abs(playerBot.omega) + Math.abs(enemyBot.omega)) * 0.08);
-    if (impactSpeed > 0.42 && battleTime - lastImpactAt > 0.1) {
-      const midpoint = playerBot.pos.clone().add(normal.clone().multiplyScalar(distance * 0.5));
-      const power = clamp01((impactSpeed - 0.25) / 3.8);
-      spawnImpactEffect(midpoint, {
-        color: power > 0.48 ? 0xffd36b : 0xf4efe6,
-        power: 0.28 + power * 0.74,
-        sparks: 8 + Math.round(power * 14)
-      });
-      triggerImpact(0.22 + power * 0.78);
-      lastImpactAt = battleTime;
-    }
-    contactDamage(playerBot, enemyBot, normal, dt);
-    contactDamage(enemyBot, playerBot, normal.clone().multiplyScalar(-1), dt);
-  }
-
-  function contactDamage(attacker, defender, directionToDefender, dt) {
-    const hitAngle = Math.atan2(directionToDefender.y, directionToDefender.x);
-    let damage = 2.2 * dt;
-    slotDefs.forEach((slot) => {
-      const partId = attacker.blueprint.slots[slot.id];
-      const diff = Math.abs(wrapAngle(hitAngle - (attacker.yaw + slot.angle)));
-      if (partId === "spike" && diff < 0.72) {
-        damage += 18 * dt;
-        addBotVelocity(defender, directionToDefender.clone().multiplyScalar(0.5 * dt));
-        attacker.active.add(slot.id);
-      }
-      if (partId === "weight" && diff < 0.95) {
-        damage += 4 * dt;
-        addBotVelocity(defender, directionToDefender.clone().multiplyScalar(0.25 * dt));
-        attacker.active.add(slot.id);
-      }
+  function clearParticles() {
+    particles.forEach((particle) => {
+      scene.remove(particle);
+      particle.geometry.dispose();
+      particle.material.dispose();
     });
-    damageBot(defender, damage, hitAngle + Math.PI);
-  }
-
-  function damageBot(bot, amount, sourceAngle) {
-    let multiplier = 1 / bot.stats.armor;
-    slotDefs.forEach((slot) => {
-      const partId = bot.blueprint.slots[slot.id];
-      if (partId !== "shield") return;
-      const diff = Math.abs(wrapAngle(sourceAngle - (bot.yaw + slot.angle)));
-      if (diff < 0.82) {
-        multiplier *= 0.38;
-        bot.active.add(slot.id);
-      }
-    });
-    bot.hp -= amount * multiplier;
-  }
-
-  function triggerImpact(power) {
-    const strength = clamp01(power);
-    hitStop = Math.max(hitStop, 0.018 + strength * 0.055);
-    cameraShake = Math.max(cameraShake, 0.18 + strength * 0.88);
-  }
-
-  function spawnImpactEffect(origin, options = {}) {
-    const power = Math.max(0.1, options.power || 0.45);
-    const color = options.color || 0xffd36b;
-    const group = new THREE.Group();
-    const radius = Math.min(origin.length(), ARENA_RADIUS);
-    group.position.set(origin.x, bowlHeight(radius) + 0.72, origin.y);
-
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.12 + power * 0.08, 0.01 + power * 0.004, 6, 44),
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.72,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      })
-    );
-    ring.rotation.x = Math.PI / 2;
-    group.add(ring);
-
-    const sparks = [];
-    const sparkCount = options.sparks || Math.round(8 + power * 11);
-    for (let i = 0; i < sparkCount; i += 1) {
-      const angle = (TAU * i) / sparkCount + Math.random() * 0.38;
-      const speed = (0.8 + Math.random() * 1.5) * (0.75 + power);
-      const spark = new THREE.Mesh(
-        new THREE.SphereGeometry(0.018 + power * 0.012, 6, 4),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.94, depthWrite: false })
-      );
-      spark.userData.velocity = new THREE.Vector3(
-        Math.cos(angle) * speed,
-        0.35 + Math.random() * 0.8 + power * 0.28,
-        Math.sin(angle) * speed
-      );
-      group.add(spark);
-      sparks.push(spark);
-    }
-
-    scene.add(group);
-    effects.push({ group, ring, sparks, life: 0, duration: 0.34 + power * 0.22, power });
-  }
-
-  function updateEffects(dt) {
-    effects.forEach((effect) => {
-      effect.life += dt;
-      const t = Math.min(1, effect.life / effect.duration);
-      effect.ring.scale.setScalar(1 + t * (2.2 + effect.power * 2.1));
-      effect.ring.material.opacity = (1 - t) * 0.72;
-      effect.sparks.forEach((spark) => {
-        spark.position.addScaledVector(spark.userData.velocity, dt);
-        spark.userData.velocity.y -= 2.9 * dt;
-        spark.material.opacity = (1 - t) * 0.94;
-        spark.scale.setScalar(1 + t * 0.7);
-      });
-    });
-
-    effects = effects.filter((effect) => {
-      if (effect.life < effect.duration) return true;
-      disposeObject(effect.group);
-      return false;
-    });
-  }
-
-  function syncBotMesh(bot, dt) {
-    const radius = bot.pos.length();
-    const y = bowlHeight(Math.min(radius, ARENA_RADIUS)) + 0.64 - (bot.out ? Math.max(0, radius - ARENA_RADIUS) * 0.55 : 0);
-    bot.group.position.set(bot.pos.x, y, bot.pos.y);
-    bot.group.rotation.y = -bot.yaw;
-    bot.core.rotation.x += bot.vel.y * dt * 1.6;
-    bot.core.rotation.z -= bot.vel.x * dt * 1.6;
-    Object.entries(bot.partGroups).forEach(([slotId, group]) => {
-      const active = bot.active.has(slotId);
-      const scale = active ? 1.12 + Math.sin(idleSpin * 18) * 0.04 : 1;
-      group.scale.setScalar(scale);
-      group.traverse((child) => {
-        if (child.userData.flame) child.visible = active;
-      });
-    });
-  }
-
-  function updateProjectilesVisuals() {
-    projectiles.forEach((shot) => {
-      shot.mesh.position.set(shot.pos.x, bowlHeight(Math.min(shot.pos.length(), ARENA_RADIUS)) + 0.7, shot.pos.y);
-    });
+    particles = [];
   }
 
   function updateCamera(dt) {
     const compact = window.innerWidth < 760;
-    const midpoint = playerBot.pos.clone().add(enemyBot.pos).multiplyScalar(0.5);
-    target.x += (midpoint.x * 0.25 - target.x) * Math.min(1, dt * 3.2);
-    target.z += (midpoint.y * 0.25 - target.z) * Math.min(1, dt * 3.2);
-    const distance = compact ? 9.8 : 8.5;
-    const height = compact ? 8.3 : 7.0;
-    camera.position.x += (target.x - camera.position.x) * Math.min(1, dt * 2);
-    camera.position.y += (height - camera.position.y) * Math.min(1, dt * 2);
-    camera.position.z += (distance + target.z - camera.position.z) * Math.min(1, dt * 2);
-    const shake = cameraShake * (compact ? 0.065 : 0.085);
-    if (shake > 0.001) {
-      camera.position.x += Math.sin(idleSpin * 71.7) * shake;
-      camera.position.y += Math.cos(idleSpin * 53.1) * shake * 0.42;
-      camera.position.z += Math.cos(idleSpin * 83.3) * shake;
-    }
-    camera.lookAt(
-      target.x + Math.sin(idleSpin * 47.5) * shake * 0.25,
-      -0.15,
-      target.z + Math.cos(idleSpin * 41.9) * shake * 0.25
-    );
-  }
-
-  function updateHud() {
-    els.playerHp.style.width = `${Math.max(0, (playerBot.hp / playerBot.stats.maxHp) * 100)}%`;
-    els.enemyHp.style.width = `${Math.max(0, (enemyBot.hp / enemyBot.stats.maxHp) * 100)}%`;
-    els.clock.textContent = battleTime.toFixed(1);
-    const dangerRadius = RIM_RADIUS - Math.min(0.65, Math.max(0, battleTime - 16) * 0.035);
-    window.AsyncTankDebug = {
-      time: battleTime,
-      dangerRadius,
-      player: {
-        radius: playerBot.pos.length(),
-        hp: playerBot.hp,
-        out: playerBot.out,
-        rimTime: playerBot.rimTime
-      },
-      enemy: {
-        radius: enemyBot.pos.length(),
-        hp: enemyBot.hp,
-        out: enemyBot.out,
-        rimTime: enemyBot.rimTime
-      }
-    };
-    document.body.dataset.playerRadius = playerBot.pos.length().toFixed(3);
-    document.body.dataset.enemyRadius = enemyBot.pos.length().toFixed(3);
-    document.body.dataset.playerRim = playerBot.rimTime.toFixed(3);
-    document.body.dataset.enemyRim = enemyBot.rimTime.toFixed(3);
-    document.body.dataset.dangerRadius = dangerRadius.toFixed(3);
-    document.body.dataset.wallPhase = battleTime < 13.5 ? "bumper" : "open";
-  }
-
-  function scoreBot(bot) {
-    if (bot.out) return -1000 + (bot.outTime || 0) + bot.outScore * 0.01;
-    return Math.max(0, bot.hp) - bot.pos.length() * 4;
-  }
-
-  function clearProjectiles() {
-    projectiles.forEach((shot) => {
-      scene.remove(shot.mesh);
-      shot.mesh.geometry.dispose();
-      shot.mesh.material.dispose();
-    });
-    projectiles = [];
-  }
-
-  function clearEffects() {
-    effects.forEach((effect) => disposeObject(effect.group));
-    effects = [];
-  }
-
-  function disposeObject(object) {
-    if (object.parent) object.parent.remove(object);
-    object.traverse((child) => {
-      if (child.geometry) child.geometry.dispose();
-      if (Array.isArray(child.material)) {
-        child.material.forEach((material) => material.dispose());
-      } else if (child.material) {
-        child.material.dispose();
-      }
-    });
+    const leader = playerMachine.state.progress >= rivalMachine.state.progress ? playerMachine : rivalMachine;
+    const sample = sampleTrack(leader.state.progress);
+    target.x += (sample.point.x - target.x) * Math.min(1, dt * 2.6);
+    target.z += (sample.point.z - target.z) * Math.min(1, dt * 2.6);
+    const height = compact ? 8.8 : 7.4;
+    const distance = compact ? 6.7 : 6.0;
+    const desired = new THREE.Vector3(target.x, height, target.z + distance);
+    const shake = cameraShake * (compact ? 0.08 : 0.1);
+    desired.x += Math.sin(raceTime * 48) * shake;
+    desired.y += Math.cos(raceTime * 37) * shake * 0.35;
+    desired.z += Math.cos(raceTime * 42) * shake;
+    camera.position.lerp(desired, Math.min(1, dt * 2.2));
+    camera.lookAt(target.x, 0.1, target.z);
   }
 
   function resize() {
@@ -1377,30 +1108,26 @@
     const height = window.innerHeight;
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
-    camera.fov = width < 760 ? 50 : 43;
+    camera.fov = width < 760 ? 50 : 44;
     camera.updateProjectionMatrix();
   }
 
-  function countPart(blueprint, partId) {
-    return slotDefs.reduce((sum, slot) => sum + (blueprint.slots[slot.id] === partId ? 1 : 0), 0);
+  function encodeBuild(build) {
+    const payload = JSON.stringify(sanitizeBuild(build));
+    return `MR1.${btoa(unescape(encodeURIComponent(payload)))}`;
   }
 
-  function encodeBlueprint(blueprint) {
-    const payload = JSON.stringify(sanitizeBlueprint(blueprint));
-    return `KB1.${btoa(unescape(encodeURIComponent(payload)))}`;
-  }
-
-  function decodeBlueprint(source) {
+  function decodeBuild(source) {
     const text = source.trim();
     if (!text) throw new Error("empty");
-    if (text.startsWith("KB1.")) {
-      return sanitizeBlueprint(JSON.parse(decodeURIComponent(escape(atob(text.slice(4))))));
+    if (text.startsWith("MR1.")) {
+      return sanitizeBuild(JSON.parse(decodeURIComponent(escape(atob(text.slice(4))))));
     }
-    return sanitizeBlueprint(JSON.parse(text));
+    return sanitizeBuild(JSON.parse(text));
   }
 
-  function sanitizeBlueprint(value) {
-    const clean = makeBlueprint(String(value.name || "Custom Core").slice(0, 18), {});
+  function sanitizeBuild(value) {
+    const clean = makeBuild(String(value.name || "Loaded Mini").slice(0, 18), {});
     slotDefs.forEach((slot) => {
       const partId = value.slots && parts[value.slots[slot.id]] ? value.slots[slot.id] : "empty";
       clean.slots[slot.id] = partId;
@@ -1408,42 +1135,26 @@
     return clean;
   }
 
-  function bowlHeight(radius) {
-    const t = Math.min(radius / ARENA_RADIUS, 1.25);
-    return -0.78 + t * t * 0.62;
+  function formatTime(value) {
+    return value == null ? "--.--" : value.toFixed(2);
   }
 
-  function slotNormal(slot) {
-    const y = slot.vertical || 0;
-    const horizontal = Math.sqrt(Math.max(0.001, 1 - y * y));
-    return new THREE.Vector3(Math.cos(slot.angle) * horizontal, y, Math.sin(slot.angle) * horizontal).normalize();
+  function normalize(value, min, max) {
+    return clamp01((value - min) / (max - min));
   }
 
-  function quaternionFromTo(from, to) {
-    return new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), to.clone().normalize()).normalize();
-  }
-
-  function yawFromQuaternion(q) {
-    return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-  }
-
-  function vectorFromAngle(angle) {
-    return new THREE.Vector2(Math.cos(angle), Math.sin(angle));
-  }
-
-  function angleTo(from, to) {
-    return Math.atan2(to.y - from.y, to.x - from.x);
-  }
-
-  function wrapAngle(angle) {
-    let value = angle;
-    while (value > Math.PI) value -= Math.PI * 2;
-    while (value < -Math.PI) value += Math.PI * 2;
-    return value;
+  function clamp(min, max, value) {
+    return Math.min(max, Math.max(min, value));
   }
 
   function clamp01(value) {
-    return Math.min(1, Math.max(0, value));
+    return clamp(0, 1, value);
+  }
+
+  function wrap01(value) {
+    let wrapped = value % 1;
+    if (wrapped < 0) wrapped += 1;
+    return wrapped;
   }
 
   function clone(value) {

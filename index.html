@@ -3,25 +3,25 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AsyncTank Katamari BOT</title>
-    <link rel="stylesheet" href="style.css?v=20260704-workbench1">
+    <title>AsyncRacer Swipe Mini</title>
+    <link rel="stylesheet" href="style.css?v=20260704-racer1">
   </head>
   <body>
     <main class="game-shell">
-      <section id="scene" class="scene" aria-label="3D battle scene"></section>
+      <section id="scene" class="scene" aria-label="3D race scene"></section>
 
       <header class="hud">
         <div class="brand">
-          <p>ASYNC TANK</p>
-          <h1>Katamari BOT</h1>
+          <p>ASYNC RACER</p>
+          <h1>Swipe Mini</h1>
         </div>
-        <div class="meters" aria-label="battle meters">
-          <div class="meter blue"><span id="playerHp"></span></div>
+        <div class="meters" aria-label="race meters">
+          <div class="meter blue"><span id="playerMeter"></span></div>
           <strong id="clock">0.0</strong>
-          <div class="meter red"><span id="enemyHp"></span></div>
+          <div class="meter red"><span id="rivalMeter"></span></div>
         </div>
         <div class="actions">
-          <button id="battleBtn" type="button">BATTLE</button>
+          <button id="raceBtn" type="button">RACE</button>
           <button id="resetBtn" type="button">RESET</button>
         </div>
       </header>
@@ -29,38 +29,42 @@
       <aside class="builder">
         <div class="builder-top">
           <div>
-            <p class="label">BOT</p>
-            <h2 id="botName">Mono Core</h2>
+            <p class="label">MACHINE</p>
+            <h2 id="machineName">Pocket Rocket</h2>
           </div>
-          <div class="status-pill" id="battleState">READY</div>
+          <div class="status-pill" id="raceState">READY</div>
         </div>
+
+        <div class="result-line" id="resultLine">0.00 / 0.00</div>
 
         <div class="selection-readout" id="selectionReadout" aria-live="polite"></div>
 
         <div class="workbench">
-          <div class="body-map" id="bodyMap" aria-label="part mounts">
-            <div class="body-core">CORE</div>
+          <div class="garage-map" id="garageMap" aria-label="machine mounts">
+            <div class="machine-shell">
+              <span></span>
+            </div>
           </div>
-          <div class="builder-telemetry" id="builderTelemetry" aria-label="build telemetry"></div>
+          <div class="builder-telemetry" id="builderTelemetry" aria-label="machine telemetry"></div>
         </div>
 
         <div class="palette" id="palette" aria-label="part palette"></div>
 
-        <div class="preset-row" id="presets" aria-label="bot presets"></div>
+        <div class="preset-row" id="presets" aria-label="machine presets"></div>
 
         <div class="enemy-row">
-          <label for="enemySelect">ENEMY</label>
-          <select id="enemySelect"></select>
+          <label for="rivalSelect">RIVAL</label>
+          <select id="rivalSelect"></select>
         </div>
 
         <div class="code-row">
           <button id="exportBtn" type="button">CODE</button>
           <button id="importBtn" type="button">LOAD</button>
         </div>
-        <textarea id="codeBox" spellcheck="false" aria-label="bot code"></textarea>
+        <textarea id="codeBox" spellcheck="false" aria-label="machine code"></textarea>
       </aside>
     </main>
 
-    <script src="app.js?v=20260704-workbench1"></script>
+    <script src="app.js?v=20260704-racer1"></script>
   </body>
 </html>
