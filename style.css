@@ -1,7 +1,13 @@
 :root {
   color-scheme: light;
-  --paper: #f8f8f8;
+  --bg: #f4f5f6;
+  --panel: #fff;
   --ink: #111;
+  --muted: #666;
+  --line: #d6d6d6;
+  --active: #111;
+  --danger: #9a1d1d;
+  --paper: var(--bg);
 }
 
 * {
@@ -44,7 +50,7 @@ body {
   display: none;
   color: var(--ink);
   font-family: "Courier New", ui-monospace, monospace;
-  font-weight: 900;
+  font-weight: 700;
   pointer-events: auto;
 }
 
@@ -59,8 +65,9 @@ body {
   width: 100%;
   height: 86px;
   resize: none;
-  border: 3px solid var(--ink);
-  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
   color: var(--ink);
   padding: 8px;
   font: 700 11px "Courier New", ui-monospace, monospace;
@@ -71,10 +78,11 @@ body {
   width: 100%;
   height: 34px;
   margin-top: 5px;
-  border: 3px solid var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: 12px;
   background: var(--ink);
-  color: var(--paper);
-  font: 900 12px "Courier New", ui-monospace, monospace;
+  color: var(--panel);
+  font: 700 12px "Courier New", ui-monospace, monospace;
 }
 
 @media (max-width: 430px) {

@@ -5,7 +5,7 @@
   const ctx = canvas.getContext("2d");
 
   const INK = "#111";
-  const PAPER = "#f8f8f8";
+  const PAPER = "#f4f5f6";
   const PALE = "#ddd";
   const GRID = 7;
   const CORE = 3;
@@ -14,7 +14,8 @@
   const MAX_WIRES = 40;
   const TICK = 1 / 30;
   const MAX_FIGHT = 45;
-  const PREFIX = "CBA1:";
+  const PREFIX = "CBA2:";
+  const OLD_PREFIX = "CBA1:";
   const DIRS = [
     { x: 0, y: -1 },
     { x: 1, y: 0 },
@@ -31,6 +32,13 @@
     battery: { hp: 16, label: "BATT", mass: 1.4, energy: 34, regen: 5 },
   };
   const PALETTE = ["wheel", "gun", "radar", "armor", "battery"];
+  const PART_INFO = {
+    wheel: { name: "Wheel", role: "MOVE", desc: "Speed and turning.", stats: ["SPD", "TURN"] },
+    gun: { name: "Gun", role: "SHOOT", desc: "Fires bullets.", stats: ["FIRE"] },
+    radar: { name: "Radar", role: "SEE", desc: "Finds enemies.", stats: ["RADAR"] },
+    armor: { name: "Armor", role: "BLOCK", desc: "Protects blocks.", stats: ["ARMOR"] },
+    battery: { name: "Battery", role: "POWER", desc: "More energy.", stats: ["ENERGY"] },
+  };
 
   const SENSORS = [
     ["always", "Always"],
@@ -68,6 +76,37 @@
     ["turnLeft", "Turn L"],
     ["turnRight", "Turn R"],
   ];
+  const SENSOR_META = {
+    always: { label: "Always", short: "Always", category: "BASIC" },
+    enemySeen: { label: "Enemy Seen", short: "Seen", category: "SEE", need: "radar" },
+    enemyFront: { label: "Enemy Front", short: "Front", category: "SEE", need: "radar" },
+    enemyNear: { label: "Enemy Near", short: "Near", category: "SEE", need: "radar" },
+    enemyFar: { label: "Enemy Far", short: "Far", category: "SEE", need: "radar" },
+    enemyLeft: { label: "Enemy Left", short: "Left", category: "SEE", need: "radar" },
+    enemyRight: { label: "Enemy Right", short: "Right", category: "SEE", need: "radar" },
+    gunReady: { label: "Gun Ready", short: "Ready", category: "GUN", need: "gun" },
+    gunAligned: { label: "Gun Aligned", short: "Lock", category: "GUN", need: "gun" },
+    bulletIncoming: { label: "Bullet Incoming", short: "Bullet", category: "DANGER" },
+    hitByBullet: { label: "Hit Bullet", short: "Hit", category: "DANGER" },
+    lowHp: { label: "Low HP", short: "Low HP", category: "DANGER" },
+    wallAhead: { label: "Wall Ahead", short: "Wall", category: "WALL" },
+    hitWall: { label: "Hit Wall", short: "Bump", category: "WALL" },
+    lowEnergy: { label: "Low Energy", short: "Low En", category: "POWER" },
+  };
+  const ACTION_META = {
+    radarSweep: { label: "Radar Sweep", short: "Sweep", category: "RADAR", need: "radar" },
+    aimAtEnemy: { label: "Aim Enemy", short: "Aim", category: "AIM", need: "gun" },
+    fire: { label: "Fire", short: "Fire", category: "SHOOT", need: "gun" },
+    moveForward: { label: "Forward", short: "Forward", category: "MOVE", need: "wheel" },
+    moveBackward: { label: "Back", short: "Back", category: "MOVE", need: "wheel" },
+    orbitLeft: { label: "Orbit L", short: "Orbit L", category: "MOVE", need: "wheel" },
+    orbitRight: { label: "Orbit R", short: "Orbit R", category: "MOVE", need: "wheel" },
+    stop: { label: "Stop", short: "Stop", category: "MOVE", need: "wheel" },
+    turnLeft: { label: "Turn L", short: "Turn L", category: "MOVE", need: "wheel" },
+    turnRight: { label: "Turn R", short: "Turn R", category: "MOVE", need: "wheel" },
+  };
+  const CONDITION_GROUPS = ["BASIC", "SEE", "GUN", "DANGER", "WALL", "POWER"];
+  const ACTION_GROUPS = ["RADAR", "AIM", "SHOOT", "MOVE"];
 
   const LS = {
     design: "circuit-bot-arena.v2.design",
@@ -89,6 +128,7 @@
     wireFrom: null,
     selectedWireIndex: null,
     selectedLogicId: null,
+    editingRuleId: null,
     hits: [],
     battle: null,
     fightOpponent: null,
@@ -120,27 +160,36 @@
     return { id, type, x, y, params: {} };
   }
 
-  function defaultSchematic() {
-    const seenReady = logic("and", 1, 1, "n_seen_ready");
-    const fireLock = logic("and", 1, 2, "n_fire_lock");
+  function rule(id, conditions, actions) {
     return {
-      logicNodes: [seenReady, fireLock],
-      wires: [
-        wire("sensor.always", "action.radarSweep"),
-        wire("sensor.enemySeen", "action.aimAtEnemy"),
-        wire("sensor.enemySeen", "n_seen_ready.in0"),
-        wire("sensor.gunReady", "n_seen_ready.in1"),
-        wire("n_seen_ready.out", "n_fire_lock.in0"),
-        wire("sensor.gunAligned", "n_fire_lock.in1"),
-        wire("n_fire_lock.out", "action.fire"),
-        wire("sensor.enemyNear", "action.moveBackward"),
-        wire("sensor.enemyFar", "action.moveForward"),
-        wire("sensor.enemySeen", "action.orbitRight"),
-        wire("sensor.wallAhead", "action.turnRight"),
-        wire("sensor.bulletIncoming", "action.orbitLeft"),
-        wire("sensor.lowHp", "action.moveBackward"),
+      id,
+      mode: "all",
+      conditions: conditions.map((sensor) => ({ sensor })),
+      actions: actions.map((action) => ({ action })),
+    };
+  }
+
+  function defaultBrain() {
+    return {
+      rules: [
+        rule("r_sweep", ["always"], ["radarSweep"]),
+        rule("r_aim", ["enemySeen"], ["aimAtEnemy"]),
+        rule("r_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]),
+        rule("r_far", ["enemyFar"], ["moveForward"]),
+        rule("r_near", ["enemyNear"], ["moveBackward"]),
+        rule("r_orbit", ["enemySeen"], ["orbitRight"]),
+        rule("r_dodge", ["bulletIncoming"], ["orbitLeft"]),
+        rule("r_wall", ["wallAhead"], ["turnRight"]),
       ],
     };
+  }
+
+  function brainFromPairs(pairs) {
+    return { rules: pairs.map((p, i) => rule(p[0] || `r_${i}`, p[1] || [], p[2] || [])) };
+  }
+
+  function defaultSchematic() {
+    return schematicFromBrain(defaultBrain());
   }
 
   function wire(from, to) {
@@ -160,8 +209,58 @@
         block("wheel", CORE + 1, CORE + 1, 0),
         block("battery", CORE, CORE + 1, 0),
       ],
-      schematic: defaultSchematic(),
+      brain: defaultBrain(),
     });
+  }
+
+  function normalizeBrain(raw) {
+    const explicit = Array.isArray(raw?.rules);
+    const src = explicit ? raw.rules : defaultBrain().rules;
+    const rules = [];
+    const seen = new Set();
+    for (const r of src) {
+      if (rules.length >= 12) break;
+      const id = String(r.id || uid("r")).replace(/[^\w-]/g, "").slice(0, 24) || uid("r");
+      if (seen.has(id)) continue;
+      const conditions = [];
+      const actions = [];
+      for (const c of r.conditions || []) {
+        const sensor = String(c.sensor || "");
+        if (SENSOR_META[sensor] && !conditions.some((x) => x.sensor === sensor)) conditions.push({ sensor, not: !!c.not });
+      }
+      for (const a of r.actions || []) {
+        const action = String(a.action || "");
+        if (ACTION_META[action] && !actions.some((x) => x.action === action)) actions.push({ action });
+      }
+      if (!conditions.length && !actions.length) continue;
+      seen.add(id);
+      rules.push({ id, mode: r.mode === "any" ? "any" : "all", conditions: conditions.slice(0, 5), actions: actions.slice(0, 4) });
+    }
+    return { rules: rules.length || explicit ? rules : defaultBrain().rules };
+  }
+
+  function schematicFromBrain(brain) {
+    const logicNodes = [];
+    const wires = [];
+    const add = (from, to) => {
+      if (wires.length < MAX_WIRES && !wires.some((w) => w.from === from && w.to === to)) wires.push(wire(from, to));
+    };
+    for (const r of brain.rules || []) {
+      const conds = (r.conditions || []).filter((c) => SENSOR_META[c.sensor] && !c.not).map((c) => `sensor.${c.sensor}`);
+      const outs = (r.actions || []).filter((a) => ACTION_META[a.action]).map((a) => `action.${a.action}`);
+      if (!conds.length || !outs.length) continue;
+      let output = conds[0];
+      for (let i = 1; i < conds.length; i += 1) {
+        if (logicNodes.length >= MAX_LOGIC) break;
+        const id = `${r.id}_and_${i}`.replace(/[^\w-]/g, "").slice(0, 24);
+        logicNodes.push(logic("and", 1, logicNodes.length, id));
+        add(output, `${id}.in0`);
+        add(conds[i], `${id}.in1`);
+        output = `${id}.out`;
+      }
+      for (const out of outs) add(output, out);
+    }
+    return { logicNodes, wires };
   }
 
   function normalizeDesign(raw) {
@@ -188,12 +287,15 @@
     core.id = "core";
 
     const connected = pruneDisconnected(blocks).slice(0, MAX_BLOCKS);
-    const schematic = normalizeSchematic(raw?.schematic || defaultSchematic());
+    const brain = normalizeBrain(raw?.brain);
+    const schematicSource = raw?.brain?.rules ? schematicFromBrain(brain) : (raw?.schematic || schematicFromBrain(brain));
+    const schematic = normalizeSchematic(schematicSource);
     return {
-      version: 1,
+      version: 2,
       name: String(raw?.name || "Bot").slice(0, 24),
       blocks: connected,
       schematic,
+      brain,
     };
   }
 
@@ -316,7 +418,7 @@
       blocks: [
         block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("battery", 3, 4),
       ],
-      schematic: { logicNodes: [], wires: [] },
+      brain: { rules: [] },
     });
     const hunter = normalizeDesign({
       version: 1,
@@ -325,7 +427,7 @@
         block("core", 3, 3, 0, "core"), block("gun", 3, 2, 1), block("armor", 4, 3, 1),
         block("radar", 2, 3, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("battery", 3, 4),
       ],
-      schematic: defaultSchematic(),
+      brain: defaultBrain(),
     });
     const charger = normalizeDesign({
       version: 1,
@@ -334,16 +436,13 @@
         block("core", 3, 3, 0, "core"), block("armor", 4, 3, 1), block("armor", 5, 3, 1),
         block("gun", 3, 2, 1), block("radar", 2, 3), block("wheel", 3, 4), block("wheel", 2, 4), block("wheel", 4, 4),
       ],
-      schematic: {
-        logicNodes: [logic("and", 1, 1, "ch_fire_a"), logic("and", 1, 2, "ch_fire_b")],
-        wires: [
-          wire("sensor.always", "action.radarSweep"), wire("sensor.always", "action.moveForward"),
-          wire("sensor.enemySeen", "action.aimAtEnemy"), wire("sensor.enemySeen", "ch_fire_a.in0"),
-          wire("sensor.gunReady", "ch_fire_a.in1"), wire("ch_fire_a.out", "ch_fire_b.in0"),
-          wire("sensor.gunAligned", "ch_fire_b.in1"), wire("ch_fire_b.out", "action.fire"),
-          wire("sensor.wallAhead", "action.turnRight"),
-        ],
-      },
+      brain: brainFromPairs([
+        ["ch_sweep", ["always"], ["radarSweep"]],
+        ["ch_charge", ["always"], ["moveForward"]],
+        ["ch_aim", ["enemySeen"], ["aimAtEnemy"]],
+        ["ch_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]],
+        ["ch_wall", ["wallAhead"], ["turnRight"]],
+      ]),
     });
     const sniper = normalizeDesign({
       version: 1,
@@ -352,16 +451,14 @@
         block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 4, 3, 1),
         block("gun", 4, 2, 1), block("battery", 2, 3), block("battery", 3, 4), block("armor", 2, 4),
       ],
-      schematic: {
-        logicNodes: [logic("and", 1, 1, "s_fire_a"), logic("and", 1, 2, "s_fire_b"), logic("timer", 1, 3, "s_tick")],
-        wires: [
-          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
-          wire("sensor.enemySeen", "s_fire_a.in0"), wire("sensor.gunReady", "s_fire_a.in1"),
-          wire("s_fire_a.out", "s_fire_b.in0"), wire("sensor.gunAligned", "s_fire_b.in1"),
-          wire("s_fire_b.out", "action.fire"), wire("sensor.enemyNear", "action.moveBackward"),
-          wire("sensor.enemyFar", "action.stop"), wire("s_tick.out", "action.turnRight"),
-        ],
-      },
+      brain: brainFromPairs([
+        ["s_sweep", ["always"], ["radarSweep"]],
+        ["s_aim", ["enemySeen"], ["aimAtEnemy"]],
+        ["s_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]],
+        ["s_back", ["enemyNear"], ["moveBackward"]],
+        ["s_hold", ["enemyFar"], ["stop"]],
+        ["s_wall", ["wallAhead"], ["turnRight"]],
+      ]),
     });
     const wallRunner = normalizeDesign({
       version: 1,
@@ -370,16 +467,13 @@
         block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 4, 3, 1),
         block("wheel", 3, 4), block("wheel", 4, 4), block("armor", 4, 2, 1), block("battery", 2, 3),
       ],
-      schematic: {
-        logicNodes: [logic("and", 1, 1, "w_fire_a"), logic("and", 1, 2, "w_fire_b")],
-        wires: [
-          wire("sensor.always", "action.radarSweep"), wire("sensor.always", "action.moveForward"),
-          wire("sensor.wallAhead", "action.turnRight"), wire("sensor.enemySeen", "action.aimAtEnemy"),
-          wire("sensor.enemySeen", "w_fire_a.in0"), wire("sensor.gunReady", "w_fire_a.in1"),
-          wire("w_fire_a.out", "w_fire_b.in0"), wire("sensor.gunAligned", "w_fire_b.in1"),
-          wire("w_fire_b.out", "action.fire"),
-        ],
-      },
+      brain: brainFromPairs([
+        ["w_sweep", ["always"], ["radarSweep"]],
+        ["w_run", ["always"], ["moveForward"]],
+        ["w_wall", ["wallAhead"], ["turnRight"]],
+        ["w_aim", ["enemySeen"], ["aimAtEnemy"]],
+        ["w_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]],
+      ]),
     });
     const dodger = normalizeDesign({
       version: 1,
@@ -388,16 +482,14 @@
         block("core", 3, 3, 0, "core"), block("radar", 3, 2), block("gun", 2, 3, 3),
         block("battery", 3, 4), block("wheel", 2, 4), block("wheel", 4, 4), block("wheel", 3, 5), block("armor", 3, 1),
       ],
-      schematic: {
-        logicNodes: [logic("and", 1, 1, "d_fire_a"), logic("and", 1, 2, "d_fire_b")],
-        wires: [
-          wire("sensor.always", "action.radarSweep"), wire("sensor.enemySeen", "action.aimAtEnemy"),
-          wire("sensor.enemySeen", "d_fire_a.in0"), wire("sensor.gunReady", "d_fire_a.in1"),
-          wire("d_fire_a.out", "d_fire_b.in0"), wire("sensor.gunAligned", "d_fire_b.in1"), wire("d_fire_b.out", "action.fire"),
-          wire("sensor.enemySeen", "action.orbitLeft"), wire("sensor.bulletIncoming", "action.orbitRight"),
-          wire("sensor.wallAhead", "action.turnRight"),
-        ],
-      },
+      brain: brainFromPairs([
+        ["d_sweep", ["always"], ["radarSweep"]],
+        ["d_aim", ["enemySeen"], ["aimAtEnemy"]],
+        ["d_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]],
+        ["d_orbit", ["enemySeen"], ["orbitLeft"]],
+        ["d_dodge", ["bulletIncoming"], ["orbitRight"]],
+        ["d_wall", ["wallAhead"], ["turnRight"]],
+      ]),
     });
     const armored = normalizeDesign({
       version: 1,
@@ -407,7 +499,7 @@
         block("armor", 4, 2, 1), block("armor", 4, 4, 1), block("gun", 3, 2, 1),
         block("radar", 2, 3, 3), block("wheel", 2, 4), block("battery", 3, 4),
       ],
-      schematic: defaultSchematic(),
+      brain: defaultBrain(),
     });
     return [targetDummy, hunter, charger, sniper, wallRunner, dodger, armored];
   }
@@ -437,7 +529,7 @@
   window.addEventListener("keydown", (event) => {
     if (event.key === "Backspace" || event.key === "Delete") {
       if (state.mode === "build") deleteSelectedBlock();
-      if (state.mode === "wire") deleteSelectedLogic();
+      if (state.mode === "brain") deleteEditingRule();
       event.preventDefault();
     } else if (event.key.toLowerCase() === "r" && state.mode === "build") {
       rotateSelectedBlock();
@@ -451,8 +543,8 @@
       setMode(hit.mode);
     } else if (state.mode === "build") {
       handleBuildHit(hit);
-    } else if (state.mode === "wire") {
-      handleWireHit(hit);
+    } else if (state.mode === "brain") {
+      handleBrainHit(hit);
     } else if (state.mode === "fight") {
       handleFightHit(hit);
     } else if (state.mode === "share") {
@@ -479,8 +571,19 @@
     } else if (hit.kind === "delete") deleteSelectedBlock();
     else if (hit.kind === "rotate") rotateSelectedBlock();
     else if (hit.kind === "random") randomDesign();
-    else if (hit.kind === "wire") setMode("wire");
+    else if (hit.kind === "brain") setMode("brain");
     else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+  }
+
+  function handleBrainHit(hit) {
+    if (hit.kind === "rule") state.editingRuleId = hit.id;
+    else if (hit.kind === "addRule") addRule();
+    else if (hit.kind === "toggleCondition") toggleRuleChip("conditions", hit.id);
+    else if (hit.kind === "toggleAction") toggleRuleChip("actions", hit.id);
+    else if (hit.kind === "deleteRule") deleteEditingRule();
+    else if (hit.kind === "doneRule") state.editingRuleId = null;
+    else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
+    else if (hit.kind === "build") setMode("build");
   }
 
   function handleWireHit(hit) {
@@ -511,6 +614,7 @@
       state.fightOpponent = state.enemies[state.enemyIndex];
       startFight(state.fightOpponent);
     } else if (hit.kind === "build") setMode("build");
+    else if (hit.kind === "brain") setMode("brain");
     else if (hit.kind === "share") setMode("share");
   }
 
@@ -565,8 +669,48 @@
       const type = PALETTE[Math.floor(rand01(guard * 13) * PALETTE.length)];
       blocks.push(block(type, x, y, defaultRot(type)));
     }
-    state.design = normalizeDesign({ version: 1, name: "Random Bot", blocks, schematic: defaultSchematic() });
+    state.design = normalizeDesign({ version: 2, name: "Random Bot", blocks, brain: defaultBrain() });
     state.selectedBlockId = null;
+    saveDesign();
+  }
+
+  function addRule() {
+    const rules = state.design.brain.rules;
+    if (rules.length >= 12) {
+      toast("MAX RULES");
+      return;
+    }
+    const r = rule(uid("r"), ["enemySeen"], ["aimAtEnemy"]);
+    rules.push(r);
+    state.editingRuleId = r.id;
+    saveDesign();
+  }
+
+  function editingRule() {
+    return state.design.brain.rules.find((r) => r.id === state.editingRuleId) || null;
+  }
+
+  function toggleRuleChip(kind, id) {
+    const r = editingRule();
+    if (!r) return;
+    const available = kind === "conditions" ? chipAvailable("sensor", id, state.design) : chipAvailable("action", id, state.design);
+    if (!available.ok) {
+      toast(available.need);
+      return;
+    }
+    const key = kind === "conditions" ? "sensor" : "action";
+    const list = r[kind];
+    const i = list.findIndex((x) => x[key] === id);
+    if (i >= 0) list.splice(i, 1);
+    else if (list.length < (kind === "conditions" ? 5 : 4)) list.push({ [key]: id });
+    saveDesign();
+  }
+
+  function deleteEditingRule() {
+    const id = state.editingRuleId;
+    if (!id) return;
+    state.design.brain.rules = state.design.brain.rules.filter((r) => r.id !== id);
+    state.editingRuleId = null;
     saveDesign();
   }
 
@@ -674,6 +818,8 @@
       sensors: {},
       prevSensors: {},
       actions: {},
+      ruleStates: {},
+      activeRules: [],
       logicMemory: {},
       rand: mulberry32(seed),
       pulse: {},
@@ -842,6 +988,28 @@
     const s = bot.design.schematic;
     const values = {};
     for (const [id] of SENSORS) values[`sensor.${id}`] = !!bot.sensors[id];
+    const rules = bot.design.brain?.rules || [];
+    if (rules.length) {
+      const actions = {};
+      for (const [id] of ACTIONS) actions[id] = false;
+      bot.ruleStates = {};
+      bot.activeRules = [];
+      for (const r of rules) {
+        const conditions = r.conditions || [];
+        const ready = conditions.length > 0 && conditions.every((c) => {
+          const value = !!bot.sensors[c.sensor];
+          return c.not ? !value : value;
+        });
+        bot.ruleStates[r.id] = ready;
+        if (ready) {
+          bot.activeRules.push(r.id);
+          for (const a of r.actions || []) if (ACTION_META[a.action]) actions[a.action] = true;
+        }
+      }
+      bot.actions = actions;
+      if (bot.side === "P") state.lastSignals = values;
+      return;
+    }
     const inputValue = (endpoint) => s.wires.some((w) => w.to === endpoint && values[w.from]);
     const hasInput = (endpoint) => s.wires.some((w) => w.to === endpoint);
     for (const node of s.logicNodes) {
@@ -1061,7 +1229,7 @@
     if (p.coreHits >= 2) notes.push("CORE EXPOSED");
     if (p.bulletIncomingTicks > 8 && p.dodgeTicks > 5) notes.push("GOOD DODGE");
     if (p.lockShots >= Math.max(2, p.wastedShots * 2)) notes.push("GOOD LOCK");
-    if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE WIRE");
+    if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE BRAIN");
     return {
       damageDealt: Math.round(p.damageDealt),
       damageTaken: Math.round(p.damageTaken),
@@ -1074,7 +1242,7 @@
 
   function fightArena() {
     const top = 58;
-    const bottom = Math.max(top + 320, state.h - 104);
+    const bottom = Math.max(top + 300, state.h - 154);
     const pad = 14;
     return { x: pad, y: top, w: state.w - pad * 2, h: bottom - top };
   }
@@ -1181,7 +1349,7 @@
     ctx.fillRect(0, 0, state.w, state.h);
     drawTabs();
     if (state.mode === "build") drawBuild();
-    else if (state.mode === "wire") drawWire();
+    else if (state.mode === "brain") drawBrain();
     else if (state.mode === "fight") drawFight();
     else drawShare();
     if (state.toastT > 0) {
@@ -1193,6 +1361,7 @@
     canvas.dataset.blocks = String(state.design.blocks.length);
     canvas.dataset.logic = String(state.design.schematic.logicNodes.length);
     canvas.dataset.wires = String(state.design.schematic.wires.length);
+    canvas.dataset.rules = String(state.design.brain.rules.length);
     canvas.dataset.fight = state.battle
       ? `${state.battle.t.toFixed(1)},${state.battle.bullets.length},${Math.round(coreHp(state.battle.player))},${Math.round(coreHp(state.battle.enemy))},${state.battle.result}`
       : "";
@@ -1211,33 +1380,37 @@
   }
 
   function drawTabs() {
-    const tabs = ["build", "wire", "fight", "share"];
-    const labels = ["BUILD", "WIRE", "FIGHT", "SHARE"];
+    const tabs = ["build", "brain", "fight", "share"];
+    const labels = ["Build", "Brain", "Test", "Share"];
     const w = state.w / tabs.length;
     for (let i = 0; i < tabs.length; i += 1) {
       const active = state.mode === tabs[i];
       ctx.fillStyle = active ? INK : PAPER;
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 3;
-      ctx.fillRect(i * w, 0, w, 38);
-      ctx.strokeRect(i * w, 0, w, 38);
-      text(labels[i], i * w + w / 2, 20, 13, "center", active ? PAPER : INK);
-      addHit("tab", i * w, 0, w, 38, { mode: tabs[i] });
+      ctx.lineWidth = active ? 2 : 1;
+      roundRect(i * w + 5, 7, w - 10, 30, 8, true, true);
+      text(labels[i], i * w + w / 2, 22, 12, "center", active ? PAPER : INK);
+      addHit("tab", i * w, 0, w, 42, { mode: tabs[i] });
     }
   }
 
   function drawBuild() {
     const l = buildLayout();
-    text(state.design.name, 16, 54, 15, "left");
+    text(state.design.name, 16, 56, 15, "left");
+    button("Random", state.w - 90, 42, 74, 30, false, 10);
+    addHit("random", state.w - 90, 42, 74, 30);
     drawBuildGrid(l);
+    drawBuildStats(l);
+    drawBuildHints(l);
+    drawBuildInspector(l);
     drawBuildPalette(l);
     drawBuildActions(l);
-    drawBuildStats(l);
+    drawFloatingBlockTools(l);
   }
 
   function buildLayout() {
-    const top = 70;
-    const gridSize = Math.floor(Math.min(state.w - 32, Math.max(230, state.h * 0.43)));
+    const top = 82;
+    const gridSize = Math.floor(Math.min(state.w - 42, Math.max(252, state.h * 0.36)));
     const cell = Math.floor(gridSize / GRID);
     const size = cell * GRID;
     return {
@@ -1245,87 +1418,96 @@
       y: top,
       cell,
       size,
-      paletteY: top + size + 18,
-      actionY: Math.min(state.h - 62, top + size + 112),
+      statsY: top + size + 14,
+      hintY: top + size + 96,
+      inspectorY: top + size + 132,
+      paletteY: Math.min(state.h - 182, top + size + 184),
+      actionY: state.h - 58,
     };
   }
 
   function drawBuildGrid(l) {
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 4;
-    ctx.strokeRect(l.x - 3, l.y - 3, l.size + 6, l.size + 6);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#bbb";
+    ctx.lineWidth = 1;
+    roundRect(l.x - 10, l.y - 10, l.size + 20, l.size + 20, 16, true, true);
     for (let y = 0; y < GRID; y += 1) {
       for (let x = 0; x < GRID; x += 1) {
         const px = l.x + x * l.cell;
         const py = l.y + y * l.cell;
         const b = state.design.blocks.find((q) => q.x === x && q.y === y);
         const place = canPlace(x, y);
-        ctx.strokeStyle = place ? "#999" : PALE;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px, py, l.cell, l.cell);
+        ctx.strokeStyle = place ? "#c9d8e8" : "#ececec";
+        ctx.lineWidth = place ? 2 : 1;
+        ctx.strokeRect(px + 2, py + 2, l.cell - 4, l.cell - 4);
         if (place && !b) {
-          ctx.fillStyle = "#eee";
-          ctx.fillRect(px + l.cell / 2 - 2, py + l.cell / 2 - 2, 4, 4);
+          ctx.fillStyle = "rgba(120,160,200,0.16)";
+          ctx.fillRect(px + 5, py + 5, l.cell - 10, l.cell - 10);
+          if (!state.selectedBlockId) drawBlockIcon(state.selectedBlockType, px + l.cell / 2, py + l.cell / 2, l.cell * 0.58, defaultRot(state.selectedBlockType), { ghost: true });
         }
-        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * 0.86, b.rot, { selected: b.id === state.selectedBlockId });
+        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * 0.92, b.rot, { selected: b.id === state.selectedBlockId });
         addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
       }
     }
   }
 
   function drawBuildPalette(l) {
-    const s = Math.min(54, Math.floor((state.w - 24) / PALETTE.length) - 6);
-    const total = PALETTE.length * s + (PALETTE.length - 1) * 6;
-    let x = (state.w - total) / 2;
+    text("Parts", 16, l.paletteY - 13, 11, "left", "#555");
+    const gap = 8;
+    const cardW = Math.max(66, Math.floor((state.w - 28 - gap * 4) / 5));
+    const cardH = 78;
+    let x = 14;
     for (const type of PALETTE) {
       const active = state.selectedBlockType === type && !state.selectedBlockId;
-      ctx.fillStyle = active ? INK : PAPER;
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 3;
-      ctx.fillRect(x, l.paletteY, s, s);
-      ctx.strokeRect(x, l.paletteY, s, s);
-      drawBlockIcon(type, x + s / 2, l.paletteY + s / 2, s * 0.72, defaultRot(type), { inverse: active });
-      addHit("palette", x, l.paletteY, s, s, { type });
-      x += s + 6;
+      ctx.fillStyle = active ? INK : "#fff";
+      ctx.strokeStyle = active ? INK : "#ccc";
+      ctx.lineWidth = active ? 2 : 1;
+      roundRect(x, l.paletteY, cardW, cardH, 12, true, true);
+      drawBlockIcon(type, x + cardW / 2, l.paletteY + 22, 31, defaultRot(type), { inverse: active });
+      const info = PART_INFO[type];
+      text(info.name, x + cardW / 2, l.paletteY + 47, 9, "center", active ? PAPER : INK);
+      text(info.role, x + cardW / 2, l.paletteY + 63, 8, "center", active ? PAPER : "#555");
+      addHit("palette", x, l.paletteY, cardW, cardH, { type });
+      x += cardW + gap;
     }
   }
 
   function drawBuildActions(l) {
-    const labels = [
-      ["ROTATE", "rotate"], ["DELETE", "delete"], ["RANDOM", "random"], ["WIRE", "wire"], ["FIGHT", "fight"],
-    ];
-    const gap = 6;
-    const w = Math.floor((state.w - 24 - gap * 4) / 5);
-    let x = 12;
-    for (const [label, kind] of labels) {
-      button(label, x, l.actionY, w, 44, kind === "fight");
-      addHit(kind, x, l.actionY, w, 44);
-      x += w + gap;
-    }
+    const gap = 10;
+    const w = Math.floor((state.w - 34 - gap) / 2);
+    button("Brain", 12, l.actionY, w, 44, false, 13);
+    button("Test", 22 + w, l.actionY, w, 44, true, 13);
+    addHit("brain", 12, l.actionY, w, 44);
+    addHit("fight", 22 + w, l.actionY, w, 44);
   }
 
   function drawBuildStats(l) {
-    const y0 = l.actionY + 56;
-    if (y0 > state.h - 24) return;
     const s = designStats(state.design);
+    const preview = !state.selectedBlockId ? designStats({ ...state.design, blocks: [...state.design.blocks, block(state.selectedBlockType, 0, 0)] }) : s;
     const items = [
-      ["SPD", s.speed / 150],
-      ["TURN", s.turn / 3.1],
-      ["RADAR", s.radar / 310],
-      ["FIRE", s.fire / 3.2],
-      ["ENERGY", s.energy / 150],
-      ["ARMOR", s.armor / 120],
+      ["SPD", s.speed / 150, preview.speed / 150],
+      ["TURN", s.turn / 3.1, preview.turn / 3.1],
+      ["RADAR", s.radar / 310, preview.radar / 310],
+      ["FIRE", s.fire / 3.2, preview.fire / 3.2],
+      ["ENERGY", s.energy / 150, preview.energy / 150],
+      ["ARMOR", s.armor / 120, preview.armor / 120],
     ];
-    const w = Math.floor((state.w - 28) / 2);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#d7d7d7";
+    ctx.lineWidth = 1;
+    roundRect(12, l.statsY, state.w - 24, 70, 12, true, true);
+    const w = Math.floor((state.w - 46) / 2);
     for (let i = 0; i < items.length; i += 1) {
       const col = i % 2;
       const row = Math.floor(i / 2);
-      const x = 14 + col * w;
-      const y = y0 + row * 18;
+      const x = 22 + col * (w + 10);
+      const y = l.statsY + 13 + row * 18;
       text(items[i][0], x, y + 5, 9, "left");
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#bbb";
+      ctx.lineWidth = 1;
       ctx.strokeRect(x + 48, y, w - 58, 10);
+      ctx.fillStyle = "#d7e7f8";
+      ctx.fillRect(x + 50, y + 2, (w - 62) * clamp(items[i][2], 0, 1), 6);
       ctx.fillStyle = INK;
       ctx.fillRect(x + 50, y + 2, (w - 62) * clamp(items[i][1], 0, 1), 6);
     }
@@ -1346,6 +1528,187 @@
       energy: BLOCKS.core.energy + batteries * BLOCKS.battery.energy,
       armor: armor * BLOCKS.armor.hp,
     };
+  }
+
+  function blockCounts(design) {
+    return {
+      wheel: design.blocks.filter((b) => b.type === "wheel").length,
+      gun: design.blocks.filter((b) => b.type === "gun").length,
+      radar: design.blocks.filter((b) => b.type === "radar").length,
+      armor: design.blocks.filter((b) => b.type === "armor").length,
+      battery: design.blocks.filter((b) => b.type === "battery").length,
+    };
+  }
+
+  function chipAvailable(kind, id, design) {
+    const meta = kind === "sensor" ? SENSOR_META[id] : ACTION_META[id];
+    if (!meta) return { ok: false, need: "LOCKED" };
+    const counts = blockCounts(design);
+    if (meta.need === "radar" && counts.radar <= 0) return { ok: false, need: "Need Radar" };
+    if (meta.need === "gun" && counts.gun <= 0) return { ok: false, need: "Need Gun" };
+    if (meta.need === "wheel" && counts.wheel <= 0) return { ok: false, need: "Need Wheel" };
+    return { ok: true, need: "" };
+  }
+
+  function buildHints() {
+    const c = blockCounts(state.design);
+    const hints = [];
+    if (!c.radar) hints.push("No Radar: cannot see.");
+    if (!c.gun) hints.push("No Gun: cannot fire.");
+    if (!c.wheel) hints.push("Low Wheels: slow bot.");
+    if (!c.battery) hints.push("Low Energy: fewer shots.");
+    const coreShielded = state.design.blocks.some((b) => b.type === "armor" && Math.abs(b.x - CORE) + Math.abs(b.y - CORE) === 1);
+    if (!coreShielded) hints.push("Exposed Core: add Armor.");
+    return hints.slice(0, 2);
+  }
+
+  function drawBuildHints(l) {
+    const hints = buildHints();
+    if (!hints.length) return;
+    for (let i = 0; i < hints.length; i += 1) {
+      text(hints[i], 18, l.hintY + i * 16, 10, "left", "#555");
+    }
+  }
+
+  function drawBuildInspector(l) {
+    const selected = state.design.blocks.find((b) => b.id === state.selectedBlockId);
+    const type = selected?.type === "core" || !selected ? state.selectedBlockType : selected.type;
+    if (!PART_INFO[type]) return;
+    const info = PART_INFO[type];
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#d7d7d7";
+    ctx.lineWidth = 1;
+    roundRect(12, l.inspectorY, state.w - 24, 38, 12, true, true);
+    drawBlockIcon(type, 36, l.inspectorY + 19, 24, selected?.rot || defaultRot(type));
+    text(info.name, 58, l.inspectorY + 13, 12, "left");
+    text(info.desc, 58, l.inspectorY + 28, 10, "left", "#555");
+    text(info.stats.join(" + "), state.w - 20, l.inspectorY + 20, 9, "right", "#555");
+  }
+
+  function drawFloatingBlockTools(l) {
+    const b = state.design.blocks.find((x) => x.id === state.selectedBlockId);
+    if (!b || b.type === "core") return;
+    const x = l.x + b.x * l.cell + l.cell / 2;
+    const y = l.y + b.y * l.cell;
+    const py = clamp(y - 42, 46, l.y + l.size - 40);
+    const px = clamp(x - 58, 12, state.w - 128);
+    button("Rotate", px, py, 58, 32, false, 10);
+    button("Delete", px + 64, py, 58, 32, false, 10);
+    addHit("rotate", px, py, 58, 32);
+    addHit("delete", px + 64, py, 58, 32);
+  }
+
+  function drawBrain() {
+    const rules = state.design.brain.rules;
+    text("Brain Builder", 16, 56, 15, "left");
+    const conditionCount = rules.reduce((sum, r) => sum + r.conditions.length, 0);
+    const actionCount = rules.reduce((sum, r) => sum + r.actions.length, 0);
+    text(`${rules.length} Rules  ${conditionCount} Conditions  ${actionCount} Actions`, 16, 78, 10, "left", "#555");
+    button("Test", state.w - 78, 44, 62, 30, true, 10);
+    addHit("fight", state.w - 78, 44, 62, 30);
+
+    const top = 94;
+    const editorOpen = !!editingRule();
+    const bottom = editorOpen ? state.h - 402 : state.h - 112;
+    const cardH = Math.max(48, Math.min(62, Math.floor((bottom - top - 12) / Math.max(1, Math.min(8, rules.length)))));
+    for (let i = 0; i < rules.length; i += 1) {
+      const y = top + i * (cardH + 7);
+      if (y + cardH > bottom) break;
+      drawRuleCard(rules[i], 14, y, state.w - 28, cardH, state.battle?.player?.ruleStates?.[rules[i].id]);
+    }
+    button("+ Rule", 16, bottom + 12, 92, 38, false, 12);
+    button("Build", state.w - 190, bottom + 12, 78, 38, false, 12);
+    button("Test", state.w - 102, bottom + 12, 86, 38, true, 12);
+    addHit("addRule", 16, bottom + 12, 92, 38);
+    addHit("build", state.w - 190, bottom + 12, 78, 38);
+    addHit("fight", state.w - 102, bottom + 12, 86, 38);
+    if (editorOpen) drawRuleEditor(editingRule());
+  }
+
+  function drawRuleCard(r, x, y, w, h, active = false) {
+    ctx.fillStyle = active ? INK : "#fff";
+    ctx.strokeStyle = active ? INK : "#d0d0d0";
+    ctx.lineWidth = state.editingRuleId === r.id ? 3 : 1;
+    roundRect(x, y, w, h, 12, true, true);
+    const ink = active ? PAPER : INK;
+    const muted = active ? "#ddd" : "#777";
+    text("WHEN", x + 12, y + 15, 8, "left", muted);
+    drawInlineChips(r.conditions.map((c) => SENSOR_META[c.sensor]?.short || c.sensor), x + 58, y + 7, w - 70, active);
+    text("DO", x + 12, y + h - 16, 8, "left", muted);
+    drawInlineChips(r.actions.map((a) => ACTION_META[a.action]?.short || a.action), x + 58, y + h - 24, w - 70, active);
+    if (!r.conditions.length || !r.actions.length) text("Incomplete", x + w - 12, y + h / 2, 9, "right", muted);
+    addHit("rule", x, y, w, h, { id: r.id });
+    ctx.fillStyle = ink;
+  }
+
+  function drawInlineChips(labels, x, y, maxW, inverse = false) {
+    let px = x;
+    const shown = labels.length ? labels : ["Empty"];
+    for (const label of shown.slice(0, 4)) {
+      const w = Math.min(74, Math.max(38, label.length * 6 + 16));
+      if (px + w > x + maxW) {
+        text("+", px + 8, y + 9, 10, "center", inverse ? PAPER : INK);
+        break;
+      }
+      ctx.fillStyle = inverse ? PAPER : "#f3f3f3";
+      ctx.strokeStyle = inverse ? PAPER : "#ddd";
+      ctx.lineWidth = 1;
+      roundRect(px, y, w, 18, 9, true, true);
+      text(label, px + w / 2, y + 9, 8, "center", inverse ? INK : "#333");
+      px += w + 5;
+    }
+  }
+
+  function drawRuleEditor(r) {
+    const h = 392;
+    const y = state.h - h;
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    roundRect(8, y, state.w - 16, h - 8, 16, true, true);
+    text("Edit Rule", 22, y + 22, 14, "left");
+    button("Done", state.w - 82, y + 10, 58, 30, true, 10);
+    addHit("doneRule", state.w - 82, y + 10, 58, 30);
+    text("WHEN", 22, y + 52, 9, "left", "#555");
+    drawChipGroups("conditions", y + 64, r, 164);
+    text("DO", 22, y + 230, 9, "left", "#555");
+    drawChipGroups("actions", y + 242, r, 96);
+    button("Delete Rule", 22, y + 348, 112, 30, false, 10);
+    addHit("deleteRule", 22, y + 348, 112, 30);
+  }
+
+  function drawChipGroups(kind, y, r, maxH) {
+    const groups = kind === "conditions" ? CONDITION_GROUPS : ACTION_GROUPS;
+    const meta = kind === "conditions" ? SENSOR_META : ACTION_META;
+    const hitKind = kind === "conditions" ? "toggleCondition" : "toggleAction";
+    const selected = new Set((r[kind] || []).map((x) => kind === "conditions" ? x.sensor : x.action));
+    let px = 22;
+    let py = y;
+    for (const group of groups) {
+      const entries = Object.entries(meta).filter(([, v]) => v.category === group);
+      if (!entries.length) continue;
+      text(group, px, py + 8, 7, "left", "#999");
+      px += 40;
+      for (const [id, m] of entries) {
+        const available = chipAvailable(kind === "conditions" ? "sensor" : "action", id, state.design);
+        const on = selected.has(id);
+        const w = Math.max(42, Math.min(76, m.short.length * 6 + 20));
+        if (px + w > state.w - 20) {
+          px = 22;
+          py += 27;
+        }
+        ctx.fillStyle = on ? INK : available.ok ? "#f7f7f7" : "#eee";
+        ctx.strokeStyle = on ? INK : "#d6d6d6";
+        ctx.lineWidth = on ? 2 : 1;
+        roundRect(px, py, w, 22, 11, true, true);
+        text(m.short, px + w / 2, py + 11, 8, "center", on ? PAPER : available.ok ? INK : "#999");
+        addHit(hitKind, px, py, w, 22, { id });
+        px += w + 6;
+      }
+      px = 22;
+      py += 30;
+      if (py > y + maxH) break;
+    }
   }
 
   function drawWire() {
@@ -1597,13 +1960,15 @@
     energyBar(12, 78, 116, b.player.energy, b.player.maxEnergy);
     text(`${Math.floor(Math.max(0, MAX_FIGHT - b.t))}`, state.w / 2, 54, 18, "center");
     const y = state.h - 46;
-    button("RESTART", 10, y, 78, 34, false, 11);
-    button("NEXT", 96, y, 58, 34, false, 11);
-    button("BUILD", state.w - 154, y, 68, 34, false, 11);
-    button("SHARE", state.w - 78, y, 68, 34, false, 11);
+    button("Restart", 10, y, 78, 34, false, 11);
+    button("Next", 96, y, 58, 34, false, 11);
+    button("Build", state.w - 226, y, 64, 34, false, 11);
+    button("Brain", state.w - 154, y, 68, 34, false, 11);
+    button("Share", state.w - 78, y, 68, 34, false, 11);
     addHit("restart", 10, y, 78, 34);
     addHit("nextEnemy", 96, y, 58, 34);
-    addHit("build", state.w - 154, y, 68, 34);
+    addHit("build", state.w - 226, y, 64, 34);
+    addHit("brain", state.w - 154, y, 68, 34);
     addHit("share", state.w - 78, y, 68, 34);
     if (b.result) {
       const info = b.analysis || resultAnalysis(b);
@@ -1641,8 +2006,8 @@
 
   function drawMiniCircuit(b) {
     const x = 12;
-    const y = state.h - 112;
-    text("SIGNAL", x, y - 9, 9, "left");
+    const y = state.h - 136;
+    text("Live Brain", x, y - 10, 10, "left", "#555");
     const items = [
       ["SEE", b.player.sensors.enemySeen],
       ["NEAR", b.player.sensors.enemyNear],
@@ -1665,6 +2030,21 @@
       text(label, px + 17, y + 10, label.length > 4 ? 6 : 7, "center", on ? PAPER : INK);
       px += 37;
     }
+    const active = state.design.brain.rules.filter((r) => b.player.ruleStates?.[r.id]).slice(0, 4);
+    let rx = x;
+    const ry = y + 28;
+    if (!active.length) {
+      text("No rule firing", x, ry + 11, 9, "left", "#777");
+    }
+    for (const r of active) {
+      const label = (r.actions[0] && ACTION_META[r.actions[0].action]?.short) || "Rule";
+      ctx.fillStyle = INK;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1;
+      roundRect(rx, ry, 76, 25, 10, true, true);
+      text(label, rx + 38, ry + 13, 9, "center", PAPER);
+      rx += 82;
+    }
     const pulses = [];
     if (b.player.pulse.enemySeen > 0) pulses.push("SEE");
     if (b.player.pulse.gunAligned > 0) pulses.push("LOCK");
@@ -1679,7 +2059,7 @@
 
   function drawShare() {
     text("BOT CODE", 16, 58, 15, "left");
-    text("Export current BOT. Import a rival code without network.", 16, 86, 10, "left");
+    text("Export your build + brain. Import a rival.", 16, 86, 10, "left", "#555");
     if (state.opponent) text(`OPPONENT: ${state.opponent.name}`, 16, state.h - 110, 12, "left");
     button("FIGHT IMPORTED", 16, state.h - 72, state.w - 32, 42, true, 14);
     addHit("fightImported", 16, state.h - 72, state.w - 32, 42);
@@ -1693,6 +2073,7 @@
     ctx.save();
     ctx.translate(Math.round(x), Math.round(y));
     ctx.rotate(rot);
+    if (opt.ghost) ctx.globalAlpha = 0.28;
     const inverse = opt.inverse;
     const flash = opt.flash > 0;
     const ink = inverse || flash ? PAPER : INK;
@@ -1752,10 +2133,26 @@
   function button(label, x, y, w, h, active = false, size = 12) {
     ctx.fillStyle = active ? INK : PAPER;
     ctx.strokeStyle = INK;
-    ctx.lineWidth = 3;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = active ? 2 : 1;
+    roundRect(x, y, w, h, 10, true, true);
     text(label, x + w / 2, y + h / 2 + 1, size, "center", active ? PAPER : INK);
+  }
+
+  function roundRect(x, y, w, h, r, fill = true, stroke = false) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h - rr);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    ctx.lineTo(x + rr, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
   }
 
   function addHit(kind, x, y, w, h, data = {}) {
@@ -1764,7 +2161,7 @@
 
   function text(value, x, y, size, align = "left", color = INK) {
     ctx.fillStyle = color;
-    ctx.font = `900 ${size}px "Courier New", monospace`;
+    ctx.font = `700 ${size}px "Courier New", monospace`;
     ctx.textAlign = align;
     ctx.textBaseline = "middle";
     ctx.fillText(String(value), Math.round(x), Math.round(y));
@@ -1781,21 +2178,23 @@
 
   function importCode(code) {
     const trimmed = String(code || "").trim();
-    if (!trimmed.startsWith(PREFIX)) throw new Error("BAD PREFIX");
-    let b64 = trimmed.slice(PREFIX.length).replace(/-/g, "+").replace(/_/g, "/");
+    const prefix = trimmed.startsWith(PREFIX) ? PREFIX : trimmed.startsWith(OLD_PREFIX) ? OLD_PREFIX : "";
+    if (!prefix) throw new Error("BAD PREFIX");
+    let b64 = trimmed.slice(prefix.length).replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
     const bin = atob(b64);
     const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
     const raw = JSON.parse(new TextDecoder().decode(bytes));
-    if (raw.version !== 1) throw new Error("BAD VERSION");
+    if (raw.version !== 1 && raw.version !== 2) throw new Error("BAD VERSION");
     return validateImportedDesign(raw);
   }
 
   function validateImportedDesign(raw) {
     if (!raw || typeof raw !== "object") throw new Error("BAD JSON");
     if (!Array.isArray(raw.blocks) || raw.blocks.length > MAX_BLOCKS) throw new Error("BAD BLOCKS");
-    if (!raw.schematic || !Array.isArray(raw.schematic.logicNodes) || !Array.isArray(raw.schematic.wires)) throw new Error("BAD SCHEMATIC");
-    if (raw.schematic.logicNodes.length > MAX_LOGIC || raw.schematic.wires.length > MAX_WIRES) throw new Error("TOO MANY NODES");
+    if (raw.schematic && (!Array.isArray(raw.schematic.logicNodes) || !Array.isArray(raw.schematic.wires))) throw new Error("BAD SCHEMATIC");
+    if (raw.schematic && (raw.schematic.logicNodes.length > MAX_LOGIC || raw.schematic.wires.length > MAX_WIRES)) throw new Error("TOO MANY NODES");
+    if (raw.brain?.rules && raw.brain.rules.length > 12) throw new Error("TOO MANY RULES");
     return normalizeDesign(raw);
   }
 
@@ -1807,7 +2206,7 @@
       <textarea id="export-code" readonly spellcheck="false"></textarea>
       <button id="copy-code" type="button">COPY</button>
       <label>IMPORT</label>
-      <textarea id="import-code" spellcheck="false" placeholder="CBA1:..."></textarea>
+      <textarea id="import-code" spellcheck="false" placeholder="CBA2:..."></textarea>
       <button id="import-code-btn" type="button">IMPORT AS OPPONENT</button>
       <div id="share-message"></div>
     `;

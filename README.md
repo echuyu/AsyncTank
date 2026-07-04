@@ -1,6 +1,6 @@
 # Circuit Bot Arena
 
-Minimal Robocode-style Canvas prototype.
+Minimal Robocode-style bot builder prototype.
 
 ## Run
 
@@ -11,13 +11,12 @@ npm run dev
 
 ## Play
 
-- BUILD: place Wheel / Gun / Radar / Armor / Battery blocks around the fixed Core.
-- WIRE: connect Sensor, Logic, and Action nodes in one global schematic.
-- FIGHT: watch bots scan, lock, orbit, dodge, use cover, fire bullets, damage blocks, and break Cores.
-- SHARE: export a `CBA1:` bot code or import a rival code as the opponent.
+- BUILD: assemble Wheel / Gun / Radar / Armor / Battery cards around the fixed Core.
+- BRAIN: edit rule cards such as `WHEN Enemy Seen + Gun Aligned DO Fire`.
+- TEST: watch bots scan, lock, orbit, dodge, use cover, fire bullets, damage blocks, and break Cores.
+- SHARE: export a `CBA2:` bot code or import a rival code as the opponent.
 
 No server, no external image assets, no user-written code.
 
-The default schematic uses Radar Sweep, Aim At Enemy, Gun Aligned, Fire,
-Orbit, Wall Ahead, and Bullet Incoming signals so wiring changes are visible in
-combat.
+The default Brain uses Radar Sweep, Aim At Enemy, Gun Aligned, Fire, Orbit,
+Wall Ahead, and Bullet Incoming rules so behavior changes are visible in combat.
