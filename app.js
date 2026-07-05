@@ -18,6 +18,7 @@
   const MAX_NODES = 50;
   const MAX_LOGIC = 12;
   const MAX_WIRES = 100;
+  const PROGRAM_GRID = 80;
   const TICK = 1 / 30;
   const MAX_FIGHT = 45;
   const PREFIX = "CBA3:";
@@ -65,7 +66,7 @@
     ["lowEnergy", "Low Energy"],
   ];
   const LOGIC_TYPES = {
-    and: { label: "AND", inputs: 2 },
+    and: { label: "AND", inputs: 3 },
     or: { label: "OR", inputs: 2 },
     not: { label: "NOT", inputs: 1 },
     timer: { label: "TIMER", inputs: 0 },
@@ -142,6 +143,8 @@
     connectingPort: null,
     libraryOpen: false,
     libraryTab: "sensor",
+    statPulseT: 0,
+    statPulseStats: [],
     pointer: {
       down: false,
       id: null,
@@ -204,10 +207,8 @@
         rule("r_sweep", ["always"], ["radarSweep"]),
         rule("r_aim", ["enemySeen"], ["aimAtEnemy"]),
         rule("r_fire", ["enemySeen", "gunReady", "gunAligned"], ["fire"]),
-        rule("r_far", ["enemyFar"], ["moveForward"]),
+        rule("r_forward", ["enemySeen"], ["moveForward"]),
         rule("r_near", ["enemyNear"], ["moveBackward"]),
-        rule("r_orbit", ["enemySeen"], ["orbitRight"]),
-        rule("r_dodge", ["bulletIncoming"], ["orbitLeft"]),
         rule("r_wall", ["wallAhead"], ["turnRight"]),
       ],
     };
@@ -233,44 +234,49 @@
     return { id, fromNode, fromPort, toNode, toPort };
   }
 
+  function snapProgramCoord(value) {
+    return Math.round(value / PROGRAM_GRID) * PROGRAM_GRID;
+  }
+
+  function snapProgramNode(node) {
+    node.x = snapProgramCoord(node.x);
+    node.y = snapProgramCoord(node.y);
+    return node;
+  }
+
   function defaultProgram() {
     const nodes = [
-      programNode("sensor", "always", -220, -220, "s_always"),
-      programNode("sensor", "enemySeen", -220, -125, "s_seen"),
-      programNode("sensor", "enemyFar", -220, -30, "s_far"),
-      programNode("sensor", "enemyNear", -220, 65, "s_near"),
-      programNode("sensor", "gunReady", -220, 160, "s_ready"),
-      programNode("sensor", "gunAligned", -220, 255, "s_lock"),
-      programNode("sensor", "bulletIncoming", -220, 350, "s_bullet"),
-      programNode("sensor", "wallAhead", -220, 445, "s_wall"),
-      programNode("logic", "and", 10, 160, "l_seen_ready"),
-      programNode("logic", "and", 125, 255, "l_fire_lock"),
-      programNode("action", "radarSweep", 270, -220, "a_sweep"),
-      programNode("action", "aimAtEnemy", 270, -125, "a_aim"),
-      programNode("action", "moveForward", 270, -30, "a_forward"),
-      programNode("action", "moveBackward", 270, 65, "a_back"),
-      programNode("action", "fire", 270, 255, "a_fire"),
-      programNode("action", "orbitLeft", 270, 350, "a_orbit"),
-      programNode("action", "turnRight", 270, 445, "a_turn"),
+      programNode("sensor", "always", -240, -240, "s_always"),
+      programNode("sensor", "enemySeen", -240, -120, "s_seen"),
+      programNode("sensor", "enemyNear", -240, 0, "s_near"),
+      programNode("sensor", "gunReady", -240, 120, "s_ready"),
+      programNode("sensor", "gunAligned", -240, 240, "s_lock"),
+      programNode("sensor", "wallAhead", -240, 360, "s_wall"),
+      programNode("logic", "and", 40, 160, "l_fire"),
+      programNode("action", "radarSweep", 320, -240, "a_sweep"),
+      programNode("action", "aimAtEnemy", 320, -120, "a_aim"),
+      programNode("action", "moveForward", 320, 0, "a_forward"),
+      programNode("action", "moveBackward", 320, 120, "a_back"),
+      programNode("action", "fire", 320, 240, "a_fire"),
+      programNode("action", "turnRight", 320, 360, "a_turn"),
     ];
     const wires = [
       programWire("s_always", "out", "a_sweep", "in", "w_sweep"),
       programWire("s_seen", "out", "a_aim", "in", "w_aim"),
-      programWire("s_far", "out", "a_forward", "in", "w_forward"),
+      programWire("s_seen", "out", "a_forward", "in", "w_forward"),
       programWire("s_near", "out", "a_back", "in", "w_back"),
-      programWire("s_seen", "out", "l_seen_ready", "in0", "w_seen_and"),
-      programWire("s_ready", "out", "l_seen_ready", "in1", "w_ready_and"),
-      programWire("l_seen_ready", "out", "l_fire_lock", "in0", "w_fire_a"),
-      programWire("s_lock", "out", "l_fire_lock", "in1", "w_fire_b"),
-      programWire("l_fire_lock", "out", "a_fire", "in", "w_fire"),
-      programWire("s_bullet", "out", "a_orbit", "in", "w_dodge"),
+      programWire("s_seen", "out", "l_fire", "in0", "w_fire_seen"),
+      programWire("s_ready", "out", "l_fire", "in1", "w_fire_ready"),
+      programWire("s_lock", "out", "l_fire", "in2", "w_fire_lock"),
+      programWire("l_fire", "out", "a_fire", "in", "w_fire"),
       programWire("s_wall", "out", "a_turn", "in", "w_wall"),
     ];
-    return { nodes, wires, view: { x: -20, y: -110, zoom: 0.54 } };
+    return { nodes, wires, view: { x: -40, y: -60, zoom: 0.48 } };
   }
 
   function normalizeProgram(raw) {
-    const src = raw && Array.isArray(raw.nodes) ? raw : defaultProgram();
+    const original = raw && Array.isArray(raw.nodes) ? raw : defaultProgram();
+    const src = programLooksLikeOldDefault(original) ? defaultProgram() : original;
     const nodes = [];
     const ids = new Set();
     for (const n of src.nodes || []) {
@@ -281,7 +287,7 @@
       const id = String(n.id || uid(kind[0] || "n")).replace(/[^\w-]/g, "").slice(0, 32) || uid("n");
       if (ids.has(id)) continue;
       ids.add(id);
-      nodes.push(programNode(kind, type, clamp(Number(n.x) || 0, -3000, 3000), clamp(Number(n.y) || 0, -3000, 3000), id));
+      nodes.push(snapProgramNode(programNode(kind, type, clamp(Number(n.x) || 0, -3000, 3000), clamp(Number(n.y) || 0, -3000, 3000), id)));
     }
     const wires = [];
     for (const w of src.wires || []) {
@@ -302,6 +308,11 @@
       zoom: clamp(Number(src.view?.zoom) || 0.82, 0.4, 2.5),
     };
     return { nodes: nodes.length ? nodes : defaultProgram().nodes, wires, view };
+  }
+
+  function programLooksLikeOldDefault(program) {
+    const ids = new Set((program?.nodes || []).map((n) => n.id));
+    return ids.has("s_bullet") && ids.has("a_orbit") && ids.has("l_seen_ready") && ids.has("l_fire_lock") && (program.nodes || []).length === 17;
   }
 
   function nodeTypeValid(kind, type) {
@@ -663,7 +674,7 @@
       ],
       brain: defaultBrain(),
     });
-    return [targetDummy, hunter, charger, sniper, wallRunner, dodger, armored];
+    return [hunter, targetDummy, charger, sniper, wallRunner, dodger, armored];
   }
 
   function resize() {
@@ -760,6 +771,7 @@
       } else if (canPlace(hit.gx, hit.gy)) {
         state.design.blocks.push(block(state.selectedBlockType, hit.gx, hit.gy, defaultRot(state.selectedBlockType)));
         state.selectedBlockId = state.design.blocks[state.design.blocks.length - 1].id;
+        triggerStatPulse(state.selectedBlockType);
         saveDesign();
       } else {
         toast("CONNECT");
@@ -785,9 +797,13 @@
   function handleProgramHit(hit) {
     if (hit.kind === "programTool") {
       if (hit.tool === "library") state.libraryOpen = !state.libraryOpen;
+      else if (hit.tool === "tidy") tidyProgramLayout();
       else if (hit.tool === "fit") fitProgramView();
       else if (hit.tool === "reset") {
-        state.design.program.view = { x: 0, y: 0, zoom: 0.72 };
+        state.design.program = defaultProgram();
+        state.selectedNodeId = null;
+        state.selectedProgramWireId = null;
+        state.connectingPort = null;
         saveDesign();
       } else if (hit.tool === "delete") deleteSelectedProgram();
     } else if (hit.kind === "libraryTab") {
@@ -878,6 +894,10 @@
       if (hit?.kind === "programPort" && hit.dir === "in") handleProgramPortTap(hit);
     }
     state.touches.delete(event.pointerId);
+    if (state.pointer.mode === "node") {
+      const n = state.design.program.nodes.find((node) => node.id === state.selectedNodeId);
+      if (n) snapProgramNode(n);
+    }
     if (state.pointer.mode === "node" || state.pointer.mode === "pan" || state.pointer.mode === "pinch") saveDesign();
     if (state.touches.size >= 2) beginProgramPinch();
     else {
@@ -905,8 +925,10 @@
     const a = pts[0];
     const b = pts[1];
     const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
     const z = clamp(state.pointer.pinchZoom * (dist / state.pointer.pinchDist), 0.4, 2.5);
-    setProgramZoomAt(state.pointer.pinchCenter.screenX, state.pointer.pinchCenter.screenY, z, state.pointer.pinchCenter.world);
+    setProgramZoomAt(cx, cy, z, state.pointer.pinchCenter.world);
   }
 
   function zoomProgramAt(x, y, factor) {
@@ -946,13 +968,31 @@
       toast("MAX NODES");
       return;
     }
-    const center = screenToWorld(state.w / 2, state.h / 2);
-    const n = programNode(kind, type, center.x, center.y);
+    const center = snapProgramPoint(screenToWorld(state.w / 2, state.h / 2));
+    const spot = findFreeProgramSpot(center.x, center.y);
+    const n = programNode(kind, type, spot.x, spot.y);
     state.design.program.nodes.push(n);
     state.selectedNodeId = n.id;
     state.selectedProgramWireId = null;
     state.libraryOpen = false;
     saveDesign();
+  }
+
+  function snapProgramPoint(p) {
+    return { x: snapProgramCoord(p.x), y: snapProgramCoord(p.y) };
+  }
+
+  function findFreeProgramSpot(x, y) {
+    const occupied = new Set(state.design.program.nodes.map((n) => `${snapProgramCoord(n.x)},${snapProgramCoord(n.y)}`));
+    const candidates = [{ x, y }];
+    for (let r = 1; r < 7; r += 1) {
+      candidates.push({ x: x + PROGRAM_GRID * r, y });
+      candidates.push({ x, y: y + PROGRAM_GRID * r });
+      candidates.push({ x: x - PROGRAM_GRID * r, y });
+      candidates.push({ x, y: y - PROGRAM_GRID * r });
+      candidates.push({ x: x + PROGRAM_GRID * r, y: y + PROGRAM_GRID * r });
+    }
+    return candidates.find((p) => !occupied.has(`${p.x},${p.y}`)) || { x, y };
   }
 
   function deleteSelectedProgram() {
@@ -970,6 +1010,30 @@
     }
   }
 
+  function tidyProgramLayout() {
+    const program = state.design.program;
+    const order = (node) => {
+      if (node.kind === "sensor") return Object.keys(SENSOR_META).indexOf(node.type);
+      if (node.kind === "action") return Object.keys(ACTION_META).indexOf(node.type);
+      return Object.keys(LOGIC_TYPES).indexOf(node.type);
+    };
+    const columns = [
+      { kind: "sensor", x: -280 },
+      { kind: "logic", x: 0 },
+      { kind: "action", x: 320 },
+    ];
+    for (const col of columns) {
+      const nodes = program.nodes.filter((n) => n.kind === col.kind).sort((a, b) => order(a) - order(b) || a.id.localeCompare(b.id));
+      const startY = -Math.floor((nodes.length - 1) / 2) * PROGRAM_GRID;
+      nodes.forEach((n, i) => {
+        n.x = snapProgramCoord(col.x);
+        n.y = snapProgramCoord(startY + i * PROGRAM_GRID);
+      });
+    }
+    fitProgramView();
+    saveDesign();
+  }
+
   function fitProgramView() {
     const nodes = state.design.program.nodes;
     if (!nodes.length) return;
@@ -982,7 +1046,7 @@
       maxY = Math.max(maxY, n.y + s.h / 2);
     }
     const area = programArea();
-    const z = clamp(Math.min(area.w / (maxX - minX + 180), area.h / (maxY - minY + 180)), 0.4, 2.5);
+    const z = clamp(Math.min(area.w / (maxX - minX + 150), area.h / (maxY - minY + 150)), 0.45, 1.35);
     state.design.program.view.zoom = z;
     state.design.program.view.x = -((minX + maxX) / 2);
     state.design.program.view.y = -((minY + maxY) / 2);
@@ -1046,6 +1110,7 @@
     const id = state.selectedBlockId;
     const b = state.design.blocks.find((x) => x.id === id);
     if (!b || b.type === "core") return;
+    triggerStatPulse(b.type);
     state.design.blocks = pruneDisconnected(state.design.blocks.filter((x) => x.id !== id));
     state.selectedBlockId = null;
     saveDesign();
@@ -1164,7 +1229,7 @@
     const arena = fightArena();
     const seed = hashString(JSON.stringify(state.design) + JSON.stringify(state.fightOpponent));
     const rng = mulberry32(seed);
-    const obstacles = makeObstacles(arena, rng);
+    const obstacles = [];
     const playerPos = startSpot(arena, obstacles, 0.2, rng);
     const enemyPos = startSpot(arena, obstacles, 0.8, rng);
     const playerAngle = Math.atan2(enemyPos.y - playerPos.y, enemyPos.x - playerPos.x) + (rng() - 0.5) * 0.7;
@@ -1465,7 +1530,8 @@
       } else if (node.kind === "logic") {
         if (node.type === "and") {
           const ports = programInputPorts(node);
-          value = ports.length > 0 && ports.every((p) => inputConnected(node, p) && inputValue(node, p));
+          const connected = ports.filter((p) => inputConnected(node, p));
+          value = connected.length > 0 && connected.every((p) => inputValue(node, p));
         } else if (node.type === "or") {
           value = programInputPorts(node).some((p) => inputConnected(node, p) && inputValue(node, p));
         } else if (node.type === "not") {
@@ -1703,19 +1769,7 @@
   }
 
   function makeObstacles(arena, rng) {
-    const base = [
-      { x: 0.45, y: 0.16, w: 0.1, h: 0.2 },
-      { x: 0.25, y: 0.58, w: 0.15, h: 0.09 },
-      { x: 0.63, y: 0.6, w: 0.12, h: 0.16 },
-    ];
-    if (arena.h > 430) base.push({ x: 0.44, y: 0.78, w: 0.12, h: 0.08 });
-    return base.map((o, i) => ({
-      x: Math.round(arena.x + arena.w * o.x + (rng() - 0.5) * 14),
-      y: Math.round(arena.y + arena.h * o.y + (rng() - 0.5) * 14),
-      w: Math.round(arena.w * o.w),
-      h: Math.round(arena.h * o.h),
-      id: i,
-    }));
+    return [];
   }
 
   function startSpot(arena, obstacles, xFrac, rng) {
@@ -1882,10 +1936,11 @@
   }
 
   function drawBuildGrid(l) {
-    ctx.fillStyle = "#eef3f8";
-    ctx.strokeStyle = "#d7e2ec";
+    ctx.fillStyle = "#eaf0f6";
+    ctx.strokeStyle = "#d6e0eb";
     ctx.lineWidth = 1;
     roundRect(l.x - 14, l.y - 14, l.size + 28, l.size + 28, 24, true, true);
+    drawBuildHull(l);
     drawBuildJoints(l);
     for (let y = 0; y < GRID; y += 1) {
       for (let x = 0; x < GRID; x += 1) {
@@ -1895,18 +1950,79 @@
         const place = canPlace(x, y);
         if (place && !b) {
           const ok = placementNatural(state.selectedBlockType, x, y);
-          ctx.fillStyle = ok ? "rgba(68, 179, 125, 0.22)" : "rgba(130, 145, 165, 0.14)";
-          ctx.strokeStyle = ok ? "#44b37d" : "#9aa8b6";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(px + l.cell / 2, py + l.cell / 2, ok ? 9 : 6, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
+          drawSocket(px + l.cell / 2, py + l.cell / 2, l.cell, ok);
         }
-        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, l.cell * (b.type === "core" ? 1.15 : 1.0), b.rot, { selected: b.id === state.selectedBlockId });
+        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, blockDrawSize(b.type, l.cell), b.rot, { selected: b.id === state.selectedBlockId });
         addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
       }
     }
+  }
+
+  function blockDrawSize(type, cell) {
+    if (type === "core") return cell * 1.52;
+    if (type === "gun" || type === "armor" || type === "wheel") return cell * 1.36;
+    if (type === "radar") return cell * 1.16;
+    if (type === "battery") return cell * 1.2;
+    return cell * 1.25;
+  }
+
+  function drawSocket(x, y, cell, strong) {
+    const r = cell * 0.25;
+    ctx.save();
+    ctx.fillStyle = strong ? "rgba(85, 200, 120, 0.2)" : "rgba(125, 145, 168, 0.12)";
+    ctx.strokeStyle = strong ? "#55c878" : "#9fb0bf";
+    ctx.lineWidth = strong ? 2 : 1;
+    ctx.setLineDash(strong ? [] : [4, 4]);
+    roundRect(x - r, y - r, r * 2, r * 2, r * 0.35, true, true);
+    ctx.setLineDash([]);
+    ctx.fillStyle = strong ? "#55c878" : "#a9b7c5";
+    ctx.fillRect(Math.round(x - 3), Math.round(y - 3), 6, 6);
+    ctx.restore();
+  }
+
+  function drawBuildHull(l) {
+    const blocks = state.design.blocks;
+    ctx.save();
+    ctx.lineCap = "round";
+    const drawn = new Set();
+    for (const b of blocks) {
+      const ax = l.x + b.x * l.cell + l.cell / 2;
+      const ay = l.y + b.y * l.cell + l.cell / 2;
+      for (const d of DIRS) {
+        const n = blocks.find((q) => q.x === b.x + d.x && q.y === b.y + d.y);
+        if (!n) continue;
+        const key = [`${b.x},${b.y}`, `${n.x},${n.y}`].sort().join("|");
+        if (drawn.has(key)) continue;
+        drawn.add(key);
+        const bx = l.x + n.x * l.cell + l.cell / 2;
+        const by = l.y + n.y * l.cell + l.cell / 2;
+        ctx.strokeStyle = "#7f92a7";
+        ctx.lineWidth = Math.max(10, l.cell * 0.24);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.strokeStyle = "#c7d4df";
+        ctx.lineWidth = Math.max(5, l.cell * 0.12);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }
+    }
+    for (const b of blocks) {
+      const x = l.x + b.x * l.cell + l.cell / 2;
+      const y = l.y + b.y * l.cell + l.cell / 2;
+      const w = b.type === "armor" ? l.cell * 1.02 : l.cell * 0.9;
+      const h = b.type === "wheel" ? l.cell * 0.58 : l.cell * 0.78;
+      ctx.fillStyle = b.type === "core" ? "#d7a54b" : "#b8c6d3";
+      ctx.strokeStyle = "#8798aa";
+      ctx.lineWidth = 1;
+      roundRect(x - w / 2, y - h / 2, w, h, 8, true, true);
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      ctx.fillRect(Math.round(x - w * 0.32), Math.round(y - h * 0.28), Math.round(w * 0.18), Math.round(h * 0.16));
+    }
+    ctx.restore();
   }
 
   function drawBuildJoints(l) {
@@ -1920,14 +2036,14 @@
         const bx = l.x + n.x * l.cell + l.cell / 2;
         const by = l.y + n.y * l.cell + l.cell / 2;
         if (ax > bx || ay > by) continue;
-        ctx.strokeStyle = "#9fb0bf";
-        ctx.lineWidth = 10;
+        ctx.strokeStyle = "#4d5f72";
+        ctx.lineWidth = Math.max(4, l.cell * 0.11);
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
-        ctx.strokeStyle = "#eaf0f6";
-        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#eef5fb";
+        ctx.lineWidth = Math.max(2, l.cell * 0.045);
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
@@ -1970,6 +2086,8 @@
   function drawBuildStats(l) {
     const s = designStats(state.design);
     const preview = !state.selectedBlockId ? designStats({ ...state.design, blocks: [...state.design.blocks, block(state.selectedBlockType, 0, 0)] }) : s;
+    const impact = new Set(!state.selectedBlockId ? statImpact(state.selectedBlockType) : []);
+    const pulse = new Set(state.statPulseT > 0 ? state.statPulseStats : []);
     const items = [
       ["SPD", s.speed / 150, preview.speed / 150],
       ["TURN", s.turn / 3.1, preview.turn / 3.1],
@@ -1988,15 +2106,30 @@
       const row = Math.floor(i / 2);
       const x = 22 + col * (w + 10);
       const y = l.statsY + 13 + row * 18;
-      text(items[i][0], x, y + 5, 9, "left");
+      const hot = impact.has(items[i][0]) || pulse.has(items[i][0]);
+      text(items[i][0], x, y + 5, 9, "left", hot ? ACCENT : INK);
       ctx.strokeStyle = "#bbb";
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 48, y, w - 58, 10);
-      ctx.fillStyle = "#d7e7f8";
+      ctx.fillStyle = hot ? "rgba(76,111,255,0.22)" : "#d7e7f8";
       ctx.fillRect(x + 50, y + 2, (w - 62) * clamp(items[i][2], 0, 1), 6);
-      ctx.fillStyle = INK;
+      ctx.fillStyle = hot && state.statPulseT > 0 ? ACCENT : INK;
       ctx.fillRect(x + 50, y + 2, (w - 62) * clamp(items[i][1], 0, 1), 6);
     }
+  }
+
+  function statImpact(type) {
+    if (type === "wheel") return ["SPD", "TURN"];
+    if (type === "gun") return ["FIRE"];
+    if (type === "radar") return ["RADAR"];
+    if (type === "armor") return ["ARMOR"];
+    if (type === "battery") return ["ENERGY"];
+    return [];
+  }
+
+  function triggerStatPulse(type) {
+    state.statPulseStats = statImpact(type);
+    state.statPulseT = 0.55;
   }
 
   function designStats(design) {
@@ -2054,12 +2187,12 @@
   function buildHints() {
     const c = blockCounts(state.design);
     const hints = [];
-    if (!c.radar) hints.push("No Radar: cannot see.");
-    if (!c.gun) hints.push("No Gun: cannot fire.");
-    if (!c.wheel) hints.push("Low Wheels: slow bot.");
-    if (!c.battery) hints.push("Low Energy: fewer shots.");
+    if (!c.radar) hints.push("No Radar. Cannot detect.");
+    if (!c.gun) hints.push("No Gun. Cannot fire.");
+    if (!c.wheel) hints.push("Low Wheels. Slow move.");
+    if (!c.battery) hints.push("Low Energy. Fewer shots.");
     const coreShielded = state.design.blocks.some((b) => b.type === "armor" && Math.abs(b.x - CORE) + Math.abs(b.y - CORE) === 1);
-    if (!coreShielded) hints.push("Exposed Core: add Armor.");
+    if (!coreShielded) hints.push("Exposed Core. Add Armor.");
     return hints.slice(0, 2);
   }
 
@@ -2092,21 +2225,27 @@
     const x = l.x + b.x * l.cell + l.cell / 2;
     const y = l.y + b.y * l.cell;
     const py = clamp(y - 42, 46, l.y + l.size - 40);
-    const px = clamp(x - 58, 12, state.w - 128);
-    button("Rotate", px, py, 58, 32, false, 10);
-    button("Delete", px + 64, py, 58, 32, false, 10);
-    addHit("rotate", px, py, 58, 32);
-    addHit("delete", px + 64, py, 58, 32);
+    const px = clamp(x - 68, 12, state.w - 148);
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.strokeStyle = "#c8d3df";
+    ctx.lineWidth = 1;
+    roundRect(px - 6, py - 6, 144, 44, 16, true, true);
+    button("Rotate", px, py, 64, 32, false, 10);
+    button("Delete", px + 72, py, 64, 32, false, 10);
+    addHit("rotate", px, py, 64, 32);
+    addHit("delete", px + 72, py, 64, 32);
   }
 
   function drawProgram() {
     const p = state.design.program;
     text("Program", 16, 56, 15, "left");
-    button("Fit", state.w - 184, 42, 48, 30, false, 10);
-    button("Reset", state.w - 128, 42, 56, 30, false, 10);
+    button("Tidy", state.w - 232, 42, 52, 30, false, 10);
+    button("Fit", state.w - 174, 42, 44, 30, false, 10);
+    button("Reset", state.w - 124, 42, 58, 30, false, 10);
     button("+", state.w - 62, 42, 46, 30, true, 16);
-    addHit("programTool", state.w - 184, 42, 48, 30, { tool: "fit" });
-    addHit("programTool", state.w - 128, 42, 56, 30, { tool: "reset" });
+    addHit("programTool", state.w - 232, 42, 52, 30, { tool: "tidy" });
+    addHit("programTool", state.w - 174, 42, 44, 30, { tool: "fit" });
+    addHit("programTool", state.w - 124, 42, 58, 30, { tool: "reset" });
     addHit("programTool", state.w - 62, 42, 46, 30, { tool: "library" });
     drawProgramCanvas(p);
     drawProgramBottomBar();
@@ -2154,11 +2293,12 @@
   }
 
   function drawProgramGrid(area, view) {
-    const step = Math.max(18, 64 * view.zoom);
+    const step = Math.max(20, PROGRAM_GRID * view.zoom);
     const ox = (area.x + area.w / 2 + view.x * view.zoom) % step;
     const oy = (area.y + area.h / 2 + view.y * view.zoom) % step;
-    ctx.strokeStyle = GRID_LINE;
+    ctx.strokeStyle = "#d8e2ec";
     ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.7;
     for (let x = area.x + ox; x < area.x + area.w; x += step) {
       ctx.beginPath();
       ctx.moveTo(x, area.y);
@@ -2171,11 +2311,12 @@
       ctx.lineTo(area.x + area.w, y);
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   }
 
   function programNodeSize(node) {
     const ports = Math.max(1, programInputPorts(node).length);
-    return { w: node.kind === "logic" ? 132 : 156, h: Math.max(76, 48 + ports * 22) };
+    return { w: node.kind === "logic" ? 148 : 168, h: Math.max(86, 52 + ports * 24) };
   }
 
   function programNodeRect(node) {
@@ -2188,7 +2329,7 @@
   function drawProgramNode(node) {
     const r = programNodeRect(node);
     const z = state.design.program.view.zoom;
-    const meta = programNodeMeta(node);
+    const meta = cleanProgramNodeMeta(node);
     const active = !!programNodeSignal(node);
     const disabled = !programNodeAvailable(node).ok;
     ctx.fillStyle = disabled ? "#eef0f3" : active ? "#f9ffe9" : "#ffffff";
@@ -2207,6 +2348,34 @@
     addHit("programNode", r.x, r.y, r.w, r.h, { nodeId: node.id });
     if (disabled) text(programNodeAvailable(node).need, r.x + 14 * z, r.y + r.h - 14 * z, Math.max(7, 9 * z), "left", DANGER);
     drawProgramPorts(node, r);
+  }
+
+  function cleanProgramNodeMeta(node) {
+    if (node.kind === "sensor") {
+      const m = SENSOR_META[node.type] || { label: node.type, short: node.type };
+      return { label: m.label, icon: cleanSensorIcon(node.type), color: "#2d8cff", kindLabel: "SENSOR" };
+    }
+    if (node.kind === "logic") return { label: LOGIC_TYPES[node.type]?.label || node.type, icon: node.type === "and" ? "&" : "L", color: "#9b63ff", kindLabel: "LOGIC" };
+    const m = ACTION_META[node.type] || { label: node.type, short: node.type };
+    return { label: m.label, icon: cleanActionIcon(node.type), color: "#ff9f2e", kindLabel: "ACTION" };
+  }
+
+  function cleanSensorIcon(type) {
+    if (type.includes("enemy")) return "E";
+    if (type.includes("gun")) return "G";
+    if (type.includes("wall")) return "W";
+    if (type.includes("bullet")) return "!";
+    return "S";
+  }
+
+  function cleanActionIcon(type) {
+    if (type.includes("fire")) return "F";
+    if (type.includes("aim")) return "A";
+    if (type.includes("radar")) return "R";
+    if (type.includes("orbit")) return "O";
+    if (type.includes("turn")) return "T";
+    if (type.includes("move") || type === "stop") return "M";
+    return "A";
   }
 
   function programNodeMeta(node) {
@@ -2242,22 +2411,24 @@
     const inputs = programInputPorts(node);
     for (let i = 0; i < inputs.length; i += 1) {
       const p = programPortScreen(node, inputs[i]);
-      drawPortDot(p.x, p.y, "#4a5564", z);
-      addHit("programPort", p.x - 14, p.y - 14, 28, 28, { nodeId: node.id, port: inputs[i], dir: "in" });
+      const candidate = state.connectingPort && canConnectProgramWire(programWire(state.connectingPort.nodeId, state.connectingPort.port, node.id, inputs[i]), state.design.program.nodes, state.design.program.wires);
+      drawPortDot(p.x, p.y, candidate ? SIGNAL : "#4a5564", z, candidate);
+      addHit("programPort", p.x - 18, p.y - 18, 36, 36, { nodeId: node.id, port: inputs[i], dir: "in" });
     }
     if (node.kind !== "action") {
       const p = programPortScreen(node, "out");
-      drawPortDot(p.x, p.y, "#1c9b63", z);
-      addHit("programPort", p.x - 14, p.y - 14, 28, 28, { nodeId: node.id, port: "out", dir: "out" });
+      const hot = state.connectingPort?.nodeId === node.id;
+      drawPortDot(p.x, p.y, hot ? SIGNAL : "#1c9b63", z, hot);
+      addHit("programPort", p.x - 18, p.y - 18, 36, 36, { nodeId: node.id, port: "out", dir: "out" });
     }
   }
 
-  function drawPortDot(x, y, color, z) {
-    ctx.fillStyle = "#fff";
+  function drawPortDot(x, y, color, z, hot = false) {
+    ctx.fillStyle = hot ? color : "#fff";
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(2, 2 * z);
+    ctx.lineWidth = Math.max(2, hot ? 3 : 2 * z);
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(5, 7 * z), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(hot ? 8 : 6, (hot ? 9 : 7) * z), 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
@@ -2352,7 +2523,7 @@
         py += cardH + 10;
       }
       const available = item.kind === "logic" ? { ok: true } : programNodeAvailable({ kind: item.kind, type: item.type });
-      const meta = programNodeMeta({ kind: item.kind, type: item.type });
+      const meta = cleanProgramNodeMeta({ kind: item.kind, type: item.type });
       ctx.fillStyle = available.ok ? "#f8fbfd" : "#f0f1f3";
       ctx.strokeStyle = available.ok ? meta.color : "#c8ced6";
       ctx.lineWidth = 1;
@@ -2667,13 +2838,45 @@
   function drawBattleBot(bot, battle) {
     const scale = battleScale(battle);
     if (bot.stats.radars > 0) drawRadarCone(bot, battle);
+    drawBattleFrame(bot, battle, scale);
     for (const bl of bot.blocks) {
       if (!bl.alive) continue;
       const p = blockWorld(bot, bl, scale);
       const rot = bot.bodyAngle + bl.rot * Math.PI / 2;
-      drawBlockTop(bl.type, p.x, p.y, scale, rot, { flash: bl.flash, side: bot.side });
+      drawBlockTop(bl.type, p.x, p.y, scale * 1.16, rot, { flash: bl.flash, side: bot.side });
     }
     drawTurret(bot, battle);
+  }
+
+  function drawBattleFrame(bot, battle, scale) {
+    ctx.save();
+    ctx.lineCap = "round";
+    const drawn = new Set();
+    for (const bl of bot.blocks) {
+      if (!bl.alive) continue;
+      for (const d of DIRS) {
+        const other = bot.blocks.find((b) => b.alive && b.localX === bl.localX + d.x && b.localY === bl.localY + d.y);
+        if (!other) continue;
+        const key = [`${bl.localX},${bl.localY}`, `${other.localX},${other.localY}`].sort().join("|");
+        if (drawn.has(key)) continue;
+        drawn.add(key);
+        const a = blockWorld(bot, bl, scale);
+        const b = blockWorld(bot, other, scale);
+        ctx.strokeStyle = "#65768a";
+        ctx.lineWidth = Math.max(5, scale * 0.36);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.strokeStyle = "#d7e0e8";
+        ctx.lineWidth = Math.max(2, scale * 0.16);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   function drawRadarCone(bot, battle) {
@@ -2783,25 +2986,22 @@
     text("Signal Strip", x, y - 10, 10, "left", "#5c6d80");
     const items = [
       ["SEE", b.player.sensors.enemySeen],
-      ["NEAR", b.player.sensors.enemyNear],
-      ["FAR", b.player.sensors.enemyFar],
       ["LOCK", b.player.sensors.gunAligned],
-      ["WALL", b.player.sensors.wallAhead],
-      ["DODGE", b.player.sensors.bulletIncoming],
+      ["READY", b.player.sensors.gunReady],
       ["AIM", b.player.actions.aimAtEnemy],
       ["FIRE", b.player.pulse.fire > 0 || b.player.actions.fire],
-      ["ORB", b.player.actions.orbitLeft || b.player.actions.orbitRight],
+      ["FWD", b.player.actions.moveForward],
       ["BACK", b.player.actions.moveBackward],
+      ["WALL", b.player.sensors.wallAhead],
     ];
     let px = x;
     for (const [label, on] of items) {
-      ctx.fillStyle = on ? INK : PAPER;
-      ctx.strokeStyle = INK;
+      ctx.fillStyle = on ? (label === "FIRE" ? "#ffb454" : INK) : PAPER;
+      ctx.strokeStyle = on ? (label === "FIRE" ? "#de7b1f" : INK) : "#c3cfda";
       ctx.lineWidth = 2;
-      ctx.fillRect(px, y, 35, 18);
-      ctx.strokeRect(px, y, 35, 18);
-      text(label, px + 17, y + 10, label.length > 4 ? 6 : 7, "center", on ? PAPER : INK);
-      px += 37;
+      roundRect(px, y, 41, 19, 8, true, true);
+      text(label, px + 20, y + 10, label.length > 4 ? 6 : 7, "center", on ? (label === "FIRE" ? "#1b2430" : PAPER) : "#536172");
+      px += 43;
     }
     const activeNodes = state.design.program.nodes.filter((n) => b.player.programValues?.[n.id] && n.kind === "action").slice(0, 4);
     let rx = x;
@@ -2821,7 +3021,7 @@
     const pulses = [];
     if (b.player.pulse.enemySeen > 0) pulses.push("SEE");
     if (b.player.pulse.gunAligned > 0) pulses.push("LOCK");
-    if (b.player.pulse.bulletIncoming > 0) pulses.push("DODGE");
+    if (b.player.pulse.bulletIncoming > 0) pulses.push("BULLET");
     if (b.player.pulse.fire > 0) pulses.push("FIRE");
     if (pulses.length) {
       ctx.fillStyle = INK;
@@ -2852,14 +3052,16 @@
     const info = PART_INFO[type] || PART_INFO.core;
     const base = inverse ? "#ffffff" : flash ? "#ffffff" : info.color;
     const dark = inverse ? "#ffffff" : info.dark;
-    ctx.shadowColor = "rgba(20,30,45,0.18)";
-    ctx.shadowBlur = opt.card ? 0 : 8;
-    ctx.shadowOffsetY = opt.card ? 0 : 3;
+    const ink = inverse ? "#ffffff" : "#152130";
+    const hi = inverse ? "#ffffff" : "rgba(255,255,255,0.46)";
+    ctx.shadowColor = "rgba(20,30,45,0.14)";
+    ctx.shadowBlur = opt.card || opt.ghost ? 0 : 5;
+    ctx.shadowOffsetY = opt.card ? 0 : 2;
     if (opt.selected) {
       ctx.strokeStyle = "#ffcc4d";
-      ctx.lineWidth = 5;
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(0, 0, s * 0.66, 0, Math.PI * 2);
+      ctx.rect(Math.round(-s * 0.56), Math.round(-s * 0.56), Math.round(s * 1.12), Math.round(s * 1.12));
       ctx.stroke();
     }
     if (type === "core") {
@@ -2867,82 +3069,84 @@
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 11);
       ctx.beginPath();
-      for (let i = 0; i < 6; i += 1) {
-        const a = Math.PI / 6 + (Math.PI * 2 * i) / 6;
-        const px = Math.cos(a) * s * 0.42;
-        const py = Math.sin(a) * s * 0.42;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
+      ctx.moveTo(-s * 0.34, -s * 0.48);
+      ctx.lineTo(s * 0.34, -s * 0.48);
+      ctx.lineTo(s * 0.5, -s * 0.28);
+      ctx.lineTo(s * 0.5, s * 0.28);
+      ctx.lineTo(s * 0.34, s * 0.48);
+      ctx.lineTo(-s * 0.34, s * 0.48);
+      ctx.lineTo(-s * 0.5, s * 0.28);
+      ctx.lineTo(-s * 0.5, -s * 0.28);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
       ctx.shadowBlur = 0;
       ctx.fillStyle = "#fff3b0";
-      ctx.beginPath();
-      ctx.arc(0, 0, s * 0.2, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(Math.round(-s * 0.18), Math.round(-s * 0.18), Math.round(s * 0.36), Math.round(s * 0.36));
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(1, s / 18);
-      ctx.stroke();
+      ctx.strokeRect(Math.round(-s * 0.18), Math.round(-s * 0.18), Math.round(s * 0.36), Math.round(s * 0.36));
+      ctx.fillStyle = hi;
+      ctx.fillRect(Math.round(-s * 0.32), Math.round(-s * 0.34), Math.round(s * 0.18), Math.round(s * 0.1));
+      ctx.fillStyle = dark;
+      ctx.fillRect(Math.round(-s * 0.07), Math.round(s * 0.28), Math.round(s * 0.14), Math.round(s * 0.07));
     } else if (type === "wheel") {
-      ctx.fillStyle = "#2f3c4d";
-      ctx.strokeStyle = "#151b22";
-      ctx.lineWidth = Math.max(2, s / 10);
-      for (const ox of [-s * 0.24, s * 0.24]) {
-        ctx.beginPath();
-        ctx.arc(ox, 0, s * 0.25, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = base;
-        ctx.beginPath();
-        ctx.arc(ox, 0, s * 0.12, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#2f3c4d";
-      }
       ctx.fillStyle = base;
-      roundRect(-s * 0.38, -s * 0.1, s * 0.76, s * 0.2, s * 0.08, true, false);
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(2, s / 14);
+      roundRect(-s * 0.46, -s * 0.18, s * 0.92, s * 0.36, s * 0.1, true, true);
+      ctx.fillStyle = "#263242";
+      ctx.strokeStyle = "#101820";
+      ctx.lineWidth = Math.max(2, s / 12);
+      for (const ox of [-s * 0.27, s * 0.27]) {
+        octagon(ox, s * 0.08, s * 0.24, true, true);
+        ctx.fillStyle = "#d6e3f1";
+        ctx.fillRect(Math.round(ox - s * 0.08), Math.round(s * 0.0), Math.round(s * 0.16), Math.round(s * 0.16));
+        ctx.fillStyle = "#263242";
+      }
+      ctx.fillStyle = hi;
+      ctx.fillRect(Math.round(-s * 0.35), Math.round(-s * 0.12), Math.round(s * 0.16), Math.round(s * 0.06));
     } else if (type === "gun") {
       ctx.fillStyle = base;
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 12);
-      ctx.beginPath();
-      ctx.arc(-s * 0.12, 0, s * 0.24, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      roundRect(-s * 0.02, -s * 0.11, s * 0.58, s * 0.22, s * 0.08, true, true);
+      octagon(-s * 0.16, 0, s * 0.26, true, true);
+      roundRect(-s * 0.01, -s * 0.12, s * 0.62, s * 0.24, s * 0.04, true, true);
       ctx.fillStyle = dark;
-      roundRect(s * 0.42, -s * 0.16, s * 0.18, s * 0.32, s * 0.04, true, false);
+      ctx.fillRect(Math.round(s * 0.42), Math.round(-s * 0.18), Math.round(s * 0.22), Math.round(s * 0.36));
+      ctx.fillStyle = hi;
+      ctx.fillRect(Math.round(s * 0.06), Math.round(-s * 0.07), Math.round(s * 0.28), Math.round(s * 0.05));
     } else if (type === "radar") {
-      ctx.fillStyle = "rgba(72,198,217,0.22)";
+      ctx.fillStyle = inverse ? "rgba(255,255,255,0.26)" : "rgba(72,198,217,0.26)";
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.arc(0, 0, s * 0.56, -0.55, 0.55);
+      ctx.arc(0, 0, s * 0.54, -0.58, 0.58);
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = base;
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 13);
+      ctx.fillRect(Math.round(-s * 0.12), Math.round(-s * 0.08), Math.round(s * 0.18), Math.round(s * 0.16));
+      ctx.strokeRect(Math.round(-s * 0.12), Math.round(-s * 0.08), Math.round(s * 0.18), Math.round(s * 0.16));
       ctx.beginPath();
-      ctx.arc(-s * 0.05, 0, s * 0.22, -1.2, 1.2);
+      ctx.arc(-s * 0.04, 0, s * 0.28, -1.05, 1.05);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(-s * 0.05, 0, s * 0.34, -1.0, 1.0);
+      ctx.arc(-s * 0.04, 0, s * 0.43, -0.88, 0.88);
       ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(-s * 0.08, 0, s * 0.1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.fillStyle = dark;
+      ctx.fillRect(Math.round(-s * 0.06), Math.round(s * 0.12), Math.round(s * 0.08), Math.round(s * 0.2));
     } else if (type === "armor") {
       ctx.fillStyle = base;
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 12);
       ctx.beginPath();
-      ctx.moveTo(-s * 0.38, -s * 0.32);
-      ctx.lineTo(s * 0.3, -s * 0.42);
-      ctx.lineTo(s * 0.42, 0);
-      ctx.lineTo(s * 0.3, s * 0.42);
-      ctx.lineTo(-s * 0.38, s * 0.32);
+      ctx.moveTo(-s * 0.46, -s * 0.34);
+      ctx.lineTo(s * 0.26, -s * 0.46);
+      ctx.lineTo(s * 0.5, -s * 0.24);
+      ctx.lineTo(s * 0.5, s * 0.24);
+      ctx.lineTo(s * 0.26, s * 0.46);
+      ctx.lineTo(-s * 0.46, s * 0.34);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
@@ -2950,25 +3154,45 @@
       ctx.strokeStyle = "#dce6ef";
       ctx.lineWidth = Math.max(1, s / 18);
       ctx.beginPath();
-      ctx.moveTo(-s * 0.18, -s * 0.25);
-      ctx.lineTo(s * 0.19, -s * 0.29);
-      ctx.moveTo(-s * 0.18, 0);
-      ctx.lineTo(s * 0.25, 0);
-      ctx.moveTo(-s * 0.18, s * 0.25);
-      ctx.lineTo(s * 0.19, s * 0.29);
+      ctx.moveTo(-s * 0.24, -s * 0.23);
+      ctx.lineTo(s * 0.2, -s * 0.3);
+      ctx.moveTo(-s * 0.27, 0);
+      ctx.lineTo(s * 0.28, 0);
+      ctx.moveTo(-s * 0.24, s * 0.23);
+      ctx.lineTo(s * 0.2, s * 0.3);
       ctx.stroke();
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.fillRect(Math.round(s * 0.3), Math.round(-s * 0.18), Math.round(s * 0.08), Math.round(s * 0.36));
     } else if (type === "battery") {
       ctx.fillStyle = base;
       ctx.strokeStyle = dark;
       ctx.lineWidth = Math.max(2, s / 12);
-      roundRect(-s * 0.28, -s * 0.38, s * 0.56, s * 0.76, s * 0.11, true, true);
+      roundRect(-s * 0.31, -s * 0.38, s * 0.62, s * 0.76, s * 0.06, true, true);
       ctx.fillStyle = dark;
-      roundRect(-s * 0.13, -s * 0.49, s * 0.26, s * 0.12, s * 0.04, true, false);
+      ctx.fillRect(Math.round(-s * 0.13), Math.round(-s * 0.5), Math.round(s * 0.26), Math.round(s * 0.12));
       ctx.fillStyle = "#ddffe2";
-      roundRect(-s * 0.17, -s * 0.2, s * 0.34, s * 0.13, s * 0.03, true, false);
-      roundRect(-s * 0.17, s * 0.03, s * 0.34, s * 0.13, s * 0.03, true, false);
+      ctx.fillRect(Math.round(-s * 0.18), Math.round(-s * 0.21), Math.round(s * 0.36), Math.round(s * 0.12));
+      ctx.fillRect(Math.round(-s * 0.18), Math.round(s * 0.03), Math.round(s * 0.36), Math.round(s * 0.12));
+      ctx.fillStyle = ink;
+      ctx.fillRect(Math.round(-s * 0.04), Math.round(-s * 0.29), Math.round(s * 0.08), Math.round(s * 0.07));
+      ctx.fillRect(Math.round(-s * 0.04), Math.round(s * 0.22), Math.round(s * 0.08), Math.round(s * 0.07));
     }
     ctx.restore();
+  }
+
+  function octagon(x, y, r, fill = true, stroke = false) {
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.42, y - r);
+    ctx.lineTo(x + r * 0.42, y - r);
+    ctx.lineTo(x + r, y - r * 0.42);
+    ctx.lineTo(x + r, y + r * 0.42);
+    ctx.lineTo(x + r * 0.42, y + r);
+    ctx.lineTo(x - r * 0.42, y + r);
+    ctx.lineTo(x - r, y + r * 0.42);
+    ctx.lineTo(x - r, y - r * 0.42);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
   }
 
   function button(label, x, y, w, h, active = false, size = 12) {
@@ -3119,6 +3343,7 @@
     const dt = Math.min(0.05, (now - frame.last) / 1000);
     frame.last = now;
     if (state.toastT > 0) state.toastT -= dt;
+    if (state.statPulseT > 0) state.statPulseT -= dt;
     if (state.mode === "fight") updateFight(dt);
     draw();
     requestAnimationFrame(frame);
