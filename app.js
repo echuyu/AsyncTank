@@ -5,7 +5,7 @@
   const ctx = canvas.getContext("2d");
 
   const INK = "#17202a";
-  const PAPER = "#f2f5f8";
+  const PAPER = "#f4f7fa";
   const PANEL = "#ffffff";
   const PALE = "#d8e0e8";
   const GRID_LINE = "#dce5ed";
@@ -18,9 +18,10 @@
   const MAX_NODES = 50;
   const MAX_LOGIC = 12;
   const MAX_WIRES = 100;
-  const PROGRAM_GRID = 80;
+  const PROGRAM_GRID = 64;
+  const PROGRAM_ROW = 128;
   const TICK = 1 / 30;
-  const MAX_FIGHT = 45;
+  const MAX_FIGHT = 32;
   const PREFIX = "CBA3:";
   const OLD_PREFIXES = ["CBA1:", "CBA2:"];
   const DIRS = [
@@ -115,11 +116,21 @@
   };
   const CONDITION_GROUPS = ["BASIC", "SEE", "GUN", "DANGER", "WALL", "POWER"];
   const ACTION_GROUPS = ["RADAR", "AIM", "SHOOT", "MOVE"];
+  const ENEMY_PROFILES = {
+    "Target Dummy": { tag: "CALIBRATION", hint: "Test lock and fire", color: "#8a96a3" },
+    "Basic Hunter": { tag: "BALANCED", hint: "Outbuild its front", color: "#4c6fff" },
+    Charger: { tag: "RUSH", hint: "Back away when near", color: "#ef596f" },
+    Sniper: { tag: "RANGE", hint: "Close distance or dodge", color: "#9b63ff" },
+    "Wall Runner": { tag: "MOBILE", hint: "Keep radar lock", color: "#2dbb9a" },
+    Dodger: { tag: "EVADE", hint: "Fire only on lock", color: "#ff9f2e" },
+    "Armored Core": { tag: "ARMORED", hint: "Attack from an angle", color: "#647b91" },
+  };
 
   const LS = {
     design: "circuit-bot-arena.v3.program-ui.design",
     opponent: "circuit-bot-arena.v3.program-ui.opponent",
     enemyIndex: "circuit-bot-arena.v3.program-ui.enemyIndex",
+    records: "circuit-bot-arena.v3.challenge-records",
   };
 
   const state = {
@@ -145,6 +156,8 @@
     libraryTab: "sensor",
     statPulseT: 0,
     statPulseStats: [],
+    buildPopT: 0,
+    buildPopId: null,
     pointer: {
       down: false,
       id: null,
@@ -169,6 +182,7 @@
     importText: "",
     exportText: "",
     lastSignals: {},
+    records: loadChallengeRecords(),
   };
 
   const shareLayer = makeShareLayer();
@@ -272,6 +286,36 @@
       programWire("s_wall", "out", "a_turn", "in", "w_wall"),
     ];
     return { nodes, wires, view: { x: -40, y: -60, zoom: 0.48 } };
+  }
+
+  function programFromBrain(brain) {
+    const rules = brain?.rules || [];
+    const sensorTypes = [...new Set(rules.flatMap((r) => (r.conditions || []).map((c) => c.sensor)).filter((type) => SENSOR_META[type]))];
+    const nodes = sensorTypes.map((type, i) => programNode("sensor", type, -320, (i - (sensorTypes.length - 1) / 2) * 112, `s_${type}`));
+    const wires = [];
+    let logicIndex = 0;
+    let actionIndex = 0;
+    for (let ri = 0; ri < rules.length; ri += 1) {
+      const r = rules[ri];
+      const sources = (r.conditions || []).map((c) => `s_${c.sensor}`).filter((id) => nodes.some((n) => n.id === id));
+      if (!sources.length) continue;
+      let output = sources[0];
+      for (let i = 1; i < sources.length; i += 2) {
+        const group = [output, sources[i], sources[i + 1]].filter(Boolean);
+        const logicId = `l_${ri}_${logicIndex++}`;
+        nodes.push(programNode("logic", "and", 0, ri * 112, logicId));
+        group.forEach((fromNode, port) => wires.push(programWire(fromNode, "out", logicId, `in${port}`, `w_${logicId}_${port}`)));
+        output = logicId;
+      }
+      for (const action of r.actions || []) {
+        if (!ACTION_META[action.action]) continue;
+        const actionId = `a_${action.action}_${actionIndex++}`;
+        nodes.push(programNode("action", action.action, 340, ri * 112, actionId));
+        wires.push(programWire(output, "out", actionId, "in", `w_${actionId}`));
+      }
+    }
+    const program = { nodes, wires, view: { x: 0, y: 0, zoom: 0.72 } };
+    return normalizeProgram(program);
   }
 
   function normalizeProgram(raw) {
@@ -447,9 +491,10 @@
     core.rot = 0;
     core.id = "core";
 
-    const connected = pruneDisconnected(blocks).slice(0, MAX_BLOCKS);
-    const program = normalizeProgram(raw?.program || raw?.schematicV3 || null);
     const brain = normalizeBrain(raw?.brain);
+    const connected = pruneDisconnected(blocks).slice(0, MAX_BLOCKS);
+    const programSource = raw?.program || raw?.schematicV3 || (raw?.brain ? programFromBrain(brain) : null);
+    const program = normalizeProgram(programSource);
     const schematicSource = raw?.schematic || schematicFromBrain(brain);
     const schematic = normalizeSchematic(schematicSource);
     return {
@@ -584,6 +629,30 @@
     }
   }
 
+  function loadChallengeRecords() {
+    try {
+      const value = JSON.parse(localStorage.getItem(LS.records) || "{}");
+      return value && typeof value === "object" ? value : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function recordChallengeResult(battle) {
+    const name = battle.enemy.design.name;
+    const previous = state.records[name] || { plays: 0, wins: 0, bestTime: null, bestCore: 0 };
+    const won = battle.result === "WIN";
+    battle.newClear = won && previous.wins === 0;
+    const next = {
+      plays: previous.plays + 1,
+      wins: previous.wins + (won ? 1 : 0),
+      bestTime: won ? (previous.bestTime == null ? Number(battle.t.toFixed(1)) : Math.min(previous.bestTime, Number(battle.t.toFixed(1)))) : previous.bestTime,
+      bestCore: won ? Math.max(previous.bestCore || 0, Math.round(coreHp(battle.player))) : previous.bestCore || 0,
+    };
+    state.records[name] = next;
+    try { localStorage.setItem(LS.records, JSON.stringify(state.records)); } catch {}
+  }
+
   function makeEnemies() {
     const targetDummy = normalizeDesign({
       version: 1,
@@ -598,7 +667,7 @@
       name: "Basic Hunter",
       blocks: [
         block("core", 3, 3, 0, "core"), block("gun", 3, 2, 1), block("armor", 4, 3, 1),
-        block("radar", 2, 3, 3), block("wheel", 2, 4), block("wheel", 4, 4), block("battery", 3, 4),
+        block("radar", 2, 3, 3), block("wheel", 2, 4), block("wheel", 4, 4),
       ],
       brain: defaultBrain(),
     });
@@ -695,8 +764,10 @@
     const rect = canvas.getBoundingClientRect();
     const x = (event.clientX - rect.left) * (state.w / rect.width);
     const y = (event.clientY - rect.top) * (state.h / rect.height);
-    if (state.mode === "program") programPointerDown(event, x, y);
-    else handlePointer(x, y);
+    if (state.mode === "program") {
+      try { canvas.setPointerCapture(event.pointerId); } catch {}
+      programPointerDown(event, x, y);
+    } else handlePointer(x, y);
     event.preventDefault();
   });
 
@@ -710,6 +781,7 @@
   });
 
   canvas.addEventListener("pointerup", (event) => {
+    try { canvas.releasePointerCapture(event.pointerId); } catch {}
     if (state.mode !== "program") return;
     const rect = canvas.getBoundingClientRect();
     const x = (event.clientX - rect.left) * (state.w / rect.width);
@@ -769,8 +841,11 @@
         state.selectedBlockId = found.id;
         state.selectedBlockType = found.type === "core" ? state.selectedBlockType : found.type;
       } else if (canPlace(hit.gx, hit.gy)) {
+        rememberBuildUndo();
         state.design.blocks.push(block(state.selectedBlockType, hit.gx, hit.gy, defaultRot(state.selectedBlockType)));
         state.selectedBlockId = state.design.blocks[state.design.blocks.length - 1].id;
+        state.buildPopId = state.selectedBlockId;
+        state.buildPopT = 0.28;
         triggerStatPulse(state.selectedBlockType);
         saveDesign();
       } else {
@@ -778,6 +853,7 @@
       }
     } else if (hit.kind === "delete") deleteSelectedBlock();
     else if (hit.kind === "rotate") rotateSelectedBlock();
+    else if (hit.kind === "undo") undoBuild();
     else if (hit.kind === "random") randomDesign();
     else if (hit.kind === "program") setMode("program");
     else if (hit.kind === "fight") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
@@ -806,6 +882,7 @@
         state.connectingPort = null;
         saveDesign();
       } else if (hit.tool === "delete") deleteSelectedProgram();
+      else if (hit.tool === "cancel") state.connectingPort = null;
     } else if (hit.kind === "libraryTab") {
       state.libraryTab = hit.tab;
     } else if (hit.kind === "libraryNode") {
@@ -877,8 +954,8 @@
       const n = state.design.program.nodes.find((node) => node.id === state.selectedNodeId);
       if (!n) return;
       const w = screenToWorld(x, y);
-      n.x = state.pointer.nodeStart.x + (w.x - state.pointer.worldX);
-      n.y = state.pointer.nodeStart.y + (w.y - state.pointer.worldY);
+      n.x = snapProgramCoord(state.pointer.nodeStart.x + (w.x - state.pointer.worldX));
+      n.y = snapProgramCoord(state.pointer.nodeStart.y + (w.y - state.pointer.worldY));
     } else if (state.pointer.mode === "pan") {
       const v = state.design.program.view;
       v.x += (x - state.pointer.lastScreenX) / v.zoom;
@@ -1018,16 +1095,16 @@
       return Object.keys(LOGIC_TYPES).indexOf(node.type);
     };
     const columns = [
-      { kind: "sensor", x: -280 },
+      { kind: "sensor", x: -320 },
       { kind: "logic", x: 0 },
       { kind: "action", x: 320 },
     ];
     for (const col of columns) {
       const nodes = program.nodes.filter((n) => n.kind === col.kind).sort((a, b) => order(a) - order(b) || a.id.localeCompare(b.id));
-      const startY = -Math.floor((nodes.length - 1) / 2) * PROGRAM_GRID;
+      const startY = -((nodes.length - 1) * PROGRAM_ROW) / 2;
       nodes.forEach((n, i) => {
         n.x = snapProgramCoord(col.x);
-        n.y = snapProgramCoord(startY + i * PROGRAM_GRID);
+        n.y = snapProgramCoord(startY + i * PROGRAM_ROW);
       });
     }
     fitProgramView();
@@ -1075,8 +1152,8 @@
 
   function handleFightHit(hit) {
     if (hit.kind === "restart") startFight(state.fightOpponent || state.enemies[state.enemyIndex]);
-    else if (hit.kind === "nextEnemy") {
-      state.enemyIndex = (state.enemyIndex + 1) % state.enemies.length;
+    else if (hit.kind === "nextEnemy" || hit.kind === "enemyNext" || hit.kind === "enemyPrev") {
+      state.enemyIndex = (state.enemyIndex + (hit.kind === "enemyPrev" ? -1 : 1) + state.enemies.length) % state.enemies.length;
       localStorage.setItem(LS.enemyIndex, String(state.enemyIndex));
       state.fightOpponent = state.enemies[state.enemyIndex];
       startFight(state.fightOpponent);
@@ -1110,6 +1187,7 @@
     const id = state.selectedBlockId;
     const b = state.design.blocks.find((x) => x.id === id);
     if (!b || b.type === "core") return;
+    rememberBuildUndo();
     triggerStatPulse(b.type);
     state.design.blocks = pruneDisconnected(state.design.blocks.filter((x) => x.id !== id));
     state.selectedBlockId = null;
@@ -1119,12 +1197,14 @@
   function rotateSelectedBlock() {
     const b = state.design.blocks.find((x) => x.id === state.selectedBlockId);
     if (b && b.type !== "core") {
+      rememberBuildUndo();
       b.rot = (b.rot + 1) % 4;
       saveDesign();
     }
   }
 
   function randomDesign() {
+    rememberBuildUndo();
     const blocks = [block("core", CORE, CORE, 0, "core")];
     let guard = 0;
     while (blocks.length < MAX_BLOCKS && guard < 200) {
@@ -1139,6 +1219,22 @@
     }
     state.design = normalizeDesign({ version: 3, name: "Random Bot", blocks, program: defaultProgram() });
     state.selectedBlockId = null;
+    saveDesign();
+  }
+
+  function rememberBuildUndo() {
+    state.undoBlocks = state.design.blocks.map((b) => ({ ...b }));
+  }
+
+  function undoBuild() {
+    if (!state.undoBlocks) return;
+    const current = state.design.blocks.map((b) => ({ ...b }));
+    state.design.blocks = state.undoBlocks.map((b) => ({ ...b }));
+    state.undoBlocks = current;
+    state.selectedBlockId = null;
+    state.buildPopId = null;
+    state.statPulseStats = ["SPD", "TURN", "RADAR", "FIRE", "ENERGY", "ARMOR"];
+    state.statPulseT = 0.55;
     saveDesign();
   }
 
@@ -1245,6 +1341,10 @@
       obstacles,
       bullets: [],
       particles: [],
+      events: [],
+      intro: 0.8,
+      hitStop: 0,
+      screenShake: 0,
       player: makeBattleBot(state.design, "P", playerPos.x, playerPos.y, playerAngle, seed ^ 0x1234),
       enemy: makeBattleBot(state.fightOpponent, "E", enemyPos.x, enemyPos.y, enemyAngle, seed ^ 0xabcd),
     };
@@ -1277,6 +1377,7 @@
       maxEnergy: 1,
       regen: 1,
       gunCooldown: 0,
+      shotCount: 0,
       hitWallT: 0,
       hitBulletT: 0,
       wallAheadT: 0,
@@ -1307,10 +1408,12 @@
         wallTicks: 0,
         bulletIncomingTicks: 0,
         dodgeTicks: 0,
+        systemsLost: [],
       },
       defeated: false,
     };
     recalcBotStats(bot);
+    bot.initialStats = { ...bot.stats };
     bot.energy = bot.maxEnergy;
     return bot;
   }
@@ -1337,7 +1440,17 @@
     const b = state.battle;
     if (!b) return;
     updateParticles(b, dt);
+    updateBattleEvents(b, dt);
+    b.screenShake = Math.max(0, b.screenShake - dt * 22);
     if (b.result) return;
+    if (b.intro > 0) {
+      b.intro = Math.max(0, b.intro - dt);
+      return;
+    }
+    if (b.hitStop > 0) {
+      b.hitStop = Math.max(0, b.hitStop - dt);
+      return;
+    }
     b.acc += Math.min(dt, 0.08);
     let loops = 0;
     while (b.acc >= TICK && loops < 4) {
@@ -1355,6 +1468,7 @@
     evaluateSchematic(b.enemy, b, dt);
     applyActions(b.player, b, dt);
     applyActions(b.enemy, b, dt);
+    separateBattleBots(b);
     updateBullets(b, dt);
     for (const bot of [b.player, b.enemy]) {
       bot.energy = clamp(bot.energy + bot.regen * dt, 0, bot.maxEnergy);
@@ -1581,6 +1695,7 @@
       bot.bodyAngle = approachAngle(bot.bodyAngle, moveAngle, bot.turn * dt * 0.55);
     } else if (a.moveForward) {
       moveAngle = bot.bodyAngle;
+      if (bot.lastSeenT > 0) bot.bodyAngle = approachAngle(bot.bodyAngle, bot.lastSeenAngle, bot.turn * dt * 0.28);
     }
     const ox = bot.x;
     const oy = bot.y;
@@ -1629,36 +1744,41 @@
   }
 
   function fireBullet(bot, battle, aimed) {
-    const gun = bot.blocks.find((bl) => bl.alive && bl.type === "gun");
-    if (!gun) return;
-    const pos = blockWorld(bot, gun, battleScale(battle));
+    const guns = bot.blocks.filter((bl) => bl.alive && bl.type === "gun");
+    if (!guns.length) return;
     const speed = 360;
-    const dmg = 10 + Math.max(0, bot.stats.guns - 1) * 2;
+    const dmg = 7.5 + Math.max(0, bot.stats.guns - 1) * 0.75;
     const cost = fireCost(bot);
-    const spread = aimed ? (bot.rand() - 0.5) * 0.05 : (bot.rand() - 0.5) * 0.9;
-    const angle = normAngle(bot.turretAngle + spread);
     bot.energy -= cost;
     bot.gunCooldown = bot.gunCooldownMax;
     bot.pulse.fire = 0.28;
-    bot.report.shots += 1;
-    if (aimed) bot.report.lockShots += 1;
-    else bot.report.wastedShots += 1;
-    battle.bullets.push({
-      x: pos.x + Math.cos(angle) * 16,
-      y: pos.y + Math.sin(angle) * 16,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      owner: bot.id,
-      damage: dmg,
-      ttl: 2.8,
-      trail: [{ x: pos.x, y: pos.y }],
-      aimed,
-    });
-    spawnSpark(pos.x, pos.y, battle, 4);
+    bot.report.shots += guns.length;
+    if (aimed) bot.report.lockShots += guns.length;
+    else bot.report.wastedShots += guns.length;
+    bot.shotCount += 1;
+    for (let i = 0; i < guns.length; i += 1) {
+      const pos = blockWorld(bot, guns[i], battleScale(battle));
+      const spread = aimed ? (bot.rand() - 0.5) * 0.045 : (bot.rand() - 0.5) * 0.92;
+      const barrelSpread = (i - (guns.length - 1) / 2) * 0.018;
+      const angle = normAngle(bot.turretAngle + spread + barrelSpread);
+      battle.bullets.push({
+        x: pos.x + Math.cos(angle) * 18,
+        y: pos.y + Math.sin(angle) * 18,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        owner: bot.id,
+        damage: dmg,
+        ttl: 2.8,
+        trail: [{ x: pos.x, y: pos.y }],
+        aimed,
+      });
+      spawnSpark(pos.x, pos.y, battle, 4);
+    }
+    pushBattleEvent(battle, aimed ? "LOCKED VOLLEY" : "WILD SHOT", bot.x, bot.y - 28, aimed ? "signal" : "muted", 0.42);
   }
 
   function fireCost(bot) {
-    return Math.max(6, 9 - Math.max(0, bot.stats.guns - 1));
+    return 7 + Math.max(0, bot.stats.guns - 1) * 5;
   }
 
   function updateBullets(battle, dt) {
@@ -1722,12 +1842,77 @@
       attacker.report.hits += 1;
     }
     if (bl.type === "core") bot.report.coreHits += 1;
+    const impact = blockWorld(bot, bl, battleScale(battle));
+    battle.screenShake = Math.max(battle.screenShake, bl.type === "armor" ? 2.5 : bl.type === "core" ? 7 : 4);
+    battle.hitStop = Math.max(battle.hitStop, bl.type === "core" ? 0.075 : 0.035);
+    pushBattleEvent(battle, bl.type === "armor" ? "ARMOR HIT" : bl.type === "core" ? "CORE HIT" : `${PART_INFO[bl.type]?.name?.toUpperCase() || "PART"} HIT`, impact.x, impact.y - 18, bl.type === "core" ? "danger" : "hit", 0.52);
     if (bl.hp <= 0 && bl.alive) {
       bl.alive = false;
       bot.report.blocksLost += 1;
-      const p = blockWorld(bot, bl, battleScale(battle));
-      spawnBreak(p.x, p.y, battle, bl.type === "core" ? 24 : 12);
+      if (bl.type !== "core") bot.report.systemsLost.push(bl.type);
+      spawnBreak(impact.x, impact.y, battle, bl.type === "core" ? 30 : 14, PART_INFO[bl.type]?.color);
+      pushBattleEvent(battle, bl.type === "core" ? "CORE BREAK" : `${PART_INFO[bl.type]?.name?.toUpperCase() || "PART"} LOST`, impact.x, impact.y, bl.type === "core" ? "danger" : "break", bl.type === "core" ? 1.1 : 0.8);
+      detachDisconnectedBattleParts(bot, battle);
     }
+  }
+
+  function separateBattleBots(battle) {
+    const a = battle.player;
+    const b = battle.enemy;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const minDist = Math.max(42, (botRadius(a, battle) + botRadius(b, battle)) * 0.5);
+    if (dist >= minDist) return;
+    const push = (minDist - dist) / 2;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    a.x -= nx * push;
+    a.y -= ny * push;
+    b.x += nx * push;
+    b.y += ny * push;
+  }
+
+  function detachDisconnectedBattleParts(bot, battle) {
+    const alive = new Map(bot.blocks.filter((b) => b.alive).map((b) => [`${b.localX},${b.localY}`, b]));
+    const core = bot.blocks.find((b) => b.type === "core" && b.alive);
+    if (!core) return;
+    const keep = new Set([`${core.localX},${core.localY}`]);
+    const open = [{ x: core.localX, y: core.localY }];
+    while (open.length) {
+      const current = open.pop();
+      for (const d of DIRS) {
+        const key = `${current.x + d.x},${current.y + d.y}`;
+        if (!alive.has(key) || keep.has(key)) continue;
+        keep.add(key);
+        open.push({ x: current.x + d.x, y: current.y + d.y });
+      }
+    }
+    for (const part of bot.blocks) {
+      const key = `${part.localX},${part.localY}`;
+      if (!part.alive || keep.has(key)) continue;
+      part.alive = false;
+      part.detached = true;
+      bot.report.blocksLost += 1;
+      bot.report.systemsLost.push(part.type);
+      const p = blockWorld(bot, part, battleScale(battle));
+      spawnBreak(p.x, p.y, battle, 10, PART_INFO[part.type]?.color);
+      pushBattleEvent(battle, "LINK LOST", p.x, p.y, "break", 0.68);
+    }
+    recalcBotStats(bot);
+  }
+
+  function pushBattleEvent(battle, label, x, y, tone = "hit", life = 0.6) {
+    battle.events.push({ label, x, y, tone, life, maxLife: life });
+    if (battle.events.length > 18) battle.events.shift();
+  }
+
+  function updateBattleEvents(battle, dt) {
+    for (const event of battle.events) {
+      event.life -= dt;
+      event.y -= dt * 18;
+    }
+    battle.events = battle.events.filter((event) => event.life > 0);
   }
 
   function finishFight(result, reason) {
@@ -1736,7 +1921,10 @@
     b.result = result;
     b.reason = reason;
     b.analysis = resultAnalysis(b);
-    spawnBreak(state.w / 2, state.h * 0.36, b, 28);
+    recordChallengeResult(b);
+    b.screenShake = 10;
+    b.hitStop = 0;
+    spawnBreak(state.w / 2, state.h * 0.36, b, 34, result === "WIN" ? "#55c878" : "#ef596f");
   }
 
   function resultAnalysis(battle) {
@@ -1748,9 +1936,19 @@
     if (p.nearTicks > battle.t * 13) notes.push("TOO CLOSE");
     if (p.wallTicks > battle.t * 7) notes.push("WALL STUCK");
     if (p.coreHits >= 2) notes.push("CORE EXPOSED");
+    if (p.systemsLost.includes("gun")) notes.push("WEAPON LOST");
+    else if (p.systemsLost.includes("radar")) notes.push("RADAR LOST");
+    else if (p.systemsLost.includes("wheel")) notes.push("MOBILITY LOST");
     if (p.bulletIncomingTicks > 8 && p.dodgeTicks > 5) notes.push("GOOD DODGE");
     if (p.lockShots >= Math.max(2, p.wastedShots * 2)) notes.push("GOOD LOCK");
     if (!notes.length) notes.push(accuracy >= 45 ? "GOOD LOCK" : "TUNE PROGRAM");
+    let nextFix = "TRY: TUNE PROGRAM";
+    if (p.coreHits >= 2) nextFix = "TRY: ARMOR AROUND CORE";
+    else if (p.enemySeenTicks < battle.t * 8) nextFix = "TRY: ADD RADAR / SWEEP";
+    else if (p.wastedShots > p.lockShots) nextFix = "TRY: LOCK BEFORE FIRE";
+    else if (p.nearTicks > battle.t * 13) nextFix = "TRY: NEAR -> BACK";
+    else if (p.systemsLost.includes("wheel")) nextFix = "TRY: PROTECT WHEELS";
+    else if (p.systemsLost.includes("gun")) nextFix = "TRY: ARMOR THE GUN";
     return {
       damageDealt: Math.round(p.damageDealt),
       damageTaken: Math.round(p.damageTaken),
@@ -1758,12 +1956,13 @@
       blocksLost: p.blocksLost,
       coreHp: Math.round(coreHp(battle.player)),
       notes: notes.slice(0, 2),
+      nextFix,
     };
   }
 
   function fightArena() {
-    const top = 58;
-    const bottom = Math.max(top + 300, state.h - 154);
+    const top = 108;
+    const bottom = Math.max(top + 300, state.h - 166);
     const pad = 14;
     return { x: pad, y: top, w: state.w - pad * 2, h: bottom - top };
   }
@@ -1833,10 +2032,10 @@
     }
   }
 
-  function spawnBreak(x, y, battle, count) {
+  function spawnBreak(x, y, battle, count, color = INK) {
     for (let i = 0; i < count; i += 1) {
       const a = battle.rng() * Math.PI * 2;
-      battle.particles.push({ x, y, vx: Math.cos(a) * (45 + battle.rng() * 130), vy: Math.sin(a) * (45 + battle.rng() * 130), life: 0.45 + battle.rng() * 0.35, size: 3 + battle.rng() * 4 });
+      battle.particles.push({ x, y, vx: Math.cos(a) * (45 + battle.rng() * 130), vy: Math.sin(a) * (45 + battle.rng() * 130), life: 0.45 + battle.rng() * 0.35, size: 3 + battle.rng() * 4, color });
     }
   }
 
@@ -1892,21 +2091,31 @@
     const tabs = ["build", "program", "fight", "share"];
     const labels = ["Build", "Program", "Test", "Share"];
     const w = state.w / tabs.length;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillRect(0, 0, state.w, 40);
+    ctx.fillStyle = "#d8e2ec";
+    ctx.fillRect(0, 39, state.w, 1);
     for (let i = 0; i < tabs.length; i += 1) {
       const active = state.mode === tabs[i];
-      ctx.fillStyle = active ? ACCENT : PANEL;
-      ctx.strokeStyle = active ? "#3149b5" : "#cbd7e4";
-      ctx.lineWidth = active ? 2 : 1;
-      roundRect(i * w + 5, 7, w - 10, 30, 8, true, true);
-      text(labels[i], i * w + w / 2, 22, 12, "center", active ? "#fff" : INK);
+      if (active) {
+        ctx.fillStyle = "rgba(76,111,255,0.1)";
+        roundRect(i * w + 8, 6, w - 16, 28, 10, true, false);
+        ctx.fillStyle = ACCENT;
+        roundRect(i * w + w * 0.28, 36, w * 0.44, 3, 2, true, false);
+      }
+      text(labels[i], i * w + w / 2, 21, 11, "center", active ? ACCENT : "#657386");
       addHit("tab", i * w, 0, w, 42, { mode: tabs[i] });
     }
   }
 
   function drawBuild() {
     const l = buildLayout();
-    text(state.design.name, 16, 56, 15, "left");
+    text(state.design.name, 16, 54, 15, "left");
+    const role = botArchetype(state.design);
+    text(role.label, 16, 70, 8, "left", role.color);
+    button("Undo", state.w - 158, 42, 62, 30, !!state.undoBlocks, 10);
     button("Random", state.w - 90, 42, 74, 30, false, 10);
+    addHit("undo", state.w - 158, 42, 62, 30);
     addHit("random", state.w - 90, 42, 74, 30);
     drawBuildGrid(l);
     drawBuildStats(l);
@@ -1919,18 +2128,30 @@
 
   function buildLayout() {
     const top = 82;
-    const gridSize = Math.floor(Math.min(state.w - 42, Math.max(252, state.h * 0.36)));
-    const cell = Math.floor(gridSize / GRID);
-    const size = cell * GRID;
+    const size = Math.floor(Math.min(state.w - 28, Math.max(252, state.h * 0.37)));
+    const visible = state.design.blocks.map((b) => ({ x: b.x, y: b.y }));
+    for (let y = 0; y < GRID; y += 1) for (let x = 0; x < GRID; x += 1) if (canPlace(x, y)) visible.push({ x, y });
+    const minX = Math.min(...visible.map((p) => p.x));
+    const maxX = Math.max(...visible.map((p) => p.x));
+    const minY = Math.min(...visible.map((p) => p.y));
+    const maxY = Math.max(...visible.map((p) => p.y));
+    const span = Math.max(maxX - minX + 1, maxY - minY + 1);
+    const cell = Math.floor(Math.min(62, (size - 24) / Math.max(1, span)));
+    const centerGX = (minX + maxX) / 2;
+    const centerGY = (minY + maxY) / 2;
+    const areaX = Math.floor((state.w - size) / 2);
+    const areaY = top;
     return {
-      x: Math.floor((state.w - size) / 2),
-      y: top,
+      x: state.w / 2 - centerGX * cell - cell / 2,
+      y: areaY + size / 2 - centerGY * cell - cell / 2,
+      areaX,
+      areaY,
       cell,
       size,
-      statsY: top + size + 14,
-      hintY: top + size + 96,
-      inspectorY: top + size + 132,
-      paletteY: Math.min(state.h - 182, top + size + 184),
+      statsY: areaY + size + 12,
+      hintY: areaY + size + 92,
+      inspectorY: areaY + size + 124,
+      paletteY: Math.min(state.h - 182, areaY + size + 170),
       actionY: state.h - 58,
     };
   }
@@ -1939,7 +2160,15 @@
     ctx.fillStyle = "#eaf0f6";
     ctx.strokeStyle = "#d6e0eb";
     ctx.lineWidth = 1;
-    roundRect(l.x - 14, l.y - 14, l.size + 28, l.size + 28, 24, true, true);
+    roundRect(l.areaX, l.areaY, l.size, l.size, 24, true, true);
+    ctx.fillStyle = "#718197";
+    text("FRONT", l.areaX + l.size - 64, l.areaY + 18, 8, "left", "#718197");
+    ctx.beginPath();
+    ctx.moveTo(l.areaX + l.size - 18, l.areaY + 18);
+    ctx.lineTo(l.areaX + l.size - 30, l.areaY + 12);
+    ctx.lineTo(l.areaX + l.size - 30, l.areaY + 24);
+    ctx.closePath();
+    ctx.fill();
     drawBuildHull(l);
     drawBuildJoints(l);
     for (let y = 0; y < GRID; y += 1) {
@@ -1952,10 +2181,22 @@
           const ok = placementNatural(state.selectedBlockType, x, y);
           drawSocket(px + l.cell / 2, py + l.cell / 2, l.cell, ok);
         }
-        if (b) drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, blockDrawSize(b.type, l.cell), b.rot, { selected: b.id === state.selectedBlockId });
-        addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
+        if (b) {
+          const pop = b.id === state.buildPopId && state.buildPopT > 0 ? 1 + Math.sin((1 - state.buildPopT / 0.28) * Math.PI) * 0.16 : 1;
+          drawBlockIcon(b.type, px + l.cell / 2, py + l.cell / 2, blockDrawSize(b.type, l.cell) * pop, b.rot, { selected: b.id === state.selectedBlockId });
+        }
+        if (b || place) addHit("cell", px, py, l.cell, l.cell, { gx: x, gy: y });
       }
     }
+  }
+
+  function botArchetype(design) {
+    const c = blockCounts(design);
+    if (c.armor >= 4) return { label: "HEAVY FRAME", color: "#647b91" };
+    if (c.gun >= 2 && c.battery >= 2) return { label: "VOLLEY STRIKER", color: "#ef596f" };
+    if (c.wheel >= 3 && c.radar >= 1) return { label: "FAST HUNTER", color: "#4c6fff" };
+    if (c.radar >= 2) return { label: "LOCK SCOUT", color: "#2a9fb2" };
+    return { label: "CUSTOM FRAME", color: "#657386" };
   }
 
   function blockDrawSize(type, cell) {
@@ -2013,14 +2254,12 @@
     for (const b of blocks) {
       const x = l.x + b.x * l.cell + l.cell / 2;
       const y = l.y + b.y * l.cell + l.cell / 2;
-      const w = b.type === "armor" ? l.cell * 1.02 : l.cell * 0.9;
-      const h = b.type === "wheel" ? l.cell * 0.58 : l.cell * 0.78;
       ctx.fillStyle = b.type === "core" ? "#d7a54b" : "#b8c6d3";
       ctx.strokeStyle = "#8798aa";
-      ctx.lineWidth = 1;
-      roundRect(x - w / 2, y - h / 2, w, h, 8, true, true);
+      ctx.lineWidth = 2;
+      octagon(x, y, l.cell * (b.type === "core" ? 0.38 : 0.27), true, true);
       ctx.fillStyle = "rgba(255,255,255,0.28)";
-      ctx.fillRect(Math.round(x - w * 0.32), Math.round(y - h * 0.28), Math.round(w * 0.18), Math.round(h * 0.16));
+      ctx.fillRect(Math.round(x - l.cell * 0.16), Math.round(y - l.cell * 0.14), Math.round(l.cell * 0.12), Math.round(l.cell * 0.08));
     }
     ctx.restore();
   }
@@ -2239,6 +2478,7 @@
   function drawProgram() {
     const p = state.design.program;
     text("Program", 16, 56, 15, "left");
+    text(`${p.nodes.length} nodes · ${p.wires.length} links`, 16, 72, 8, "left", "#657386");
     button("Tidy", state.w - 232, 42, 52, 30, false, 10);
     button("Fit", state.w - 174, 42, 44, 30, false, 10);
     button("Reset", state.w - 124, 42, 58, 30, false, 10);
@@ -2316,7 +2556,7 @@
 
   function programNodeSize(node) {
     const ports = Math.max(1, programInputPorts(node).length);
-    return { w: node.kind === "logic" ? 148 : 168, h: Math.max(86, 52 + ports * 24) };
+    return { w: node.kind === "logic" ? 144 : 160, h: node.kind === "logic" ? Math.max(86, 42 + ports * 22) : 78 };
   }
 
   function programNodeRect(node) {
@@ -2457,9 +2697,24 @@
     ctx.moveTo(a.x, a.y);
     ctx.bezierCurveTo(a.x + dx, a.y, b.x - dx, b.y, b.x, b.y);
     ctx.stroke();
-    const hx = Math.min(a.x, b.x) - 10;
-    const hy = Math.min(a.y, b.y) - 12;
-    addHit("programWire", hx, hy, Math.abs(b.x - a.x) + 20, Math.abs(b.y - a.y) + 24, { wireId: w.id });
+    if (!temp) {
+      let previous = a;
+      for (let i = 1; i <= 14; i += 1) {
+        const t = i / 14;
+        const point = cubicPoint(a, { x: a.x + dx, y: a.y }, { x: b.x - dx, y: b.y }, b, t);
+        const pad = selected ? 12 : 9;
+        addHit("programWire", Math.min(previous.x, point.x) - pad, Math.min(previous.y, point.y) - pad, Math.abs(point.x - previous.x) + pad * 2, Math.abs(point.y - previous.y) + pad * 2, { wireId: w.id });
+        previous = point;
+      }
+    }
+  }
+
+  function cubicPoint(a, c1, c2, b, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
+      y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
+    };
   }
 
   function drawTempWire() {
@@ -2482,18 +2737,19 @@
     ctx.fillStyle = "rgba(255,255,255,0.92)";
     roundRect(10, y - 8, state.w - 20, 60, 16, true, false);
     button("Build", 18, y, 70, 38, false, 11);
-    button("Delete", 98, y, 76, 38, !!state.selectedProgramWireId || !!state.selectedNodeId, 11);
+    const choosing = !!state.connectingPort;
+    button(choosing ? "Cancel" : "Delete", 98, y, 76, 38, choosing || !!state.selectedProgramWireId || !!state.selectedNodeId, 11);
     button("Test", state.w - 92, y, 74, 38, true, 12);
     addHit("build", 18, y, 70, 38);
-    addHit("programTool", 98, y, 76, 38, { tool: "delete" });
+    addHit("programTool", 98, y, 76, 38, { tool: choosing ? "cancel" : "delete" });
     addHit("fight", state.w - 92, y, 74, 38);
     const z = state.design.program.view.zoom;
-    text(`${Math.round(z * 100)}%`, state.w / 2, y + 19, 11, "center", "#657386");
+    text(choosing ? "Tap an input" : state.selectedProgramWireId ? "Link selected" : `${Math.round(z * 100)}%`, state.w / 2 + 20, y + 19, choosing ? 10 : 11, "center", choosing ? "#278e55" : "#657386");
   }
 
   function drawNodeLibrary() {
     const w = Math.min(360, state.w - 24);
-    const h = 250;
+    const h = Math.min(380, state.h - 180);
     const x = (state.w - w) / 2;
     const y = state.h - h - 76;
     ctx.fillStyle = "#ffffff";
@@ -2806,11 +3062,17 @@
   function drawFight() {
     const b = state.battle;
     if (!b) return;
+    const shakeX = Math.sin(b.t * 157) * b.screenShake;
+    const shakeY = Math.cos(b.t * 131) * b.screenShake * 0.65;
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
     drawArena(b);
     drawBattleBot(b.player, b);
     drawBattleBot(b.enemy, b);
     drawBullets(b);
     drawParticles(b);
+    drawBattleEvents(b);
+    ctx.restore();
     drawFightHud(b);
     drawMiniCircuit(b);
   }
@@ -2830,9 +3092,13 @@
       for (let x = o.x + 6; x < o.x + o.w - 4; x += 10) ctx.fillRect(x, o.y + 6, 5, 5);
     }
     for (let x = ar.x + 18; x < ar.x + ar.w; x += 28) {
-      ctx.fillStyle = PALE;
-      ctx.fillRect(x, ar.y + ar.h / 2, 8, 2);
+      ctx.fillStyle = "#dce5ed";
+      ctx.fillRect(x, ar.y + ar.h / 2, 7, 2);
     }
+    ctx.fillStyle = "rgba(76,111,255,0.035)";
+    ctx.fillRect(ar.x + 4, ar.y + 4, ar.w / 2 - 4, ar.h - 8);
+    ctx.fillStyle = "rgba(239,89,111,0.035)";
+    ctx.fillRect(ar.x + ar.w / 2, ar.y + 4, ar.w / 2 - 4, ar.h - 8);
   }
 
   function drawBattleBot(bot, battle) {
@@ -2842,8 +3108,8 @@
     for (const bl of bot.blocks) {
       if (!bl.alive) continue;
       const p = blockWorld(bot, bl, scale);
-      const rot = bot.bodyAngle + bl.rot * Math.PI / 2;
-      drawBlockTop(bl.type, p.x, p.y, scale * 1.16, rot, { flash: bl.flash, side: bot.side });
+      const rot = bl.type === "gun" ? bot.turretAngle : bot.bodyAngle + bl.rot * Math.PI / 2;
+      drawBlockTop(bl.type, p.x, p.y, scale * 1.16, rot, { flash: bl.flash, side: bot.side, hpRatio: bl.hp / bl.maxHp });
     }
     drawTurret(bot, battle);
   }
@@ -2893,12 +3159,16 @@
 
   function drawTurret(bot, battle) {
     const scale = battleScale(battle);
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(bot.x, bot.y);
-    ctx.lineTo(bot.x + Math.cos(bot.turretAngle) * scale * 2.1, bot.y + Math.sin(bot.turretAngle) * scale * 2.1);
-    ctx.stroke();
+    const guns = bot.blocks.filter((bl) => bl.alive && bl.type === "gun");
+    for (const gun of guns) {
+      const p = blockWorld(bot, gun, scale);
+      ctx.strokeStyle = bot.sensors.gunAligned ? "#ef596f" : INK;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + Math.cos(bot.turretAngle) * scale * 1.65, p.y + Math.sin(bot.turretAngle) * scale * 1.65);
+      ctx.stroke();
+    }
     ctx.strokeStyle = bot.sensors.enemySeen ? INK : "#999";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -2909,7 +3179,8 @@
 
   function drawBullets(battle) {
     for (const bullet of battle.bullets) {
-      ctx.strokeStyle = bullet.aimed ? INK : "#777";
+      const color = bullet.owner === "P" ? "#315be8" : "#df4058";
+      ctx.strokeStyle = bullet.aimed ? color : "#87919d";
       ctx.lineWidth = bullet.aimed ? 3 : 2;
       ctx.beginPath();
       for (let i = 0; i < bullet.trail.length; i += 1) {
@@ -2918,23 +3189,51 @@
         else ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
-      ctx.fillStyle = INK;
-      ctx.fillRect(bullet.x - 3, bullet.y - 3, 6, 6);
+      ctx.fillStyle = color;
+      ctx.fillRect(bullet.x - 4, bullet.y - 4, 8, 8);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(bullet.x - 1, bullet.y - 1, 2, 2);
     }
   }
 
   function drawParticles(battle) {
-    ctx.fillStyle = INK;
-    for (const p of battle.particles) ctx.fillRect(p.x, p.y, p.size, p.size);
+    for (const p of battle.particles) {
+      ctx.globalAlpha = clamp(p.life * 2.2, 0, 1);
+      ctx.fillStyle = p.color || INK;
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), Math.round(p.size), Math.round(p.size));
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBattleEvents(battle) {
+    for (const event of battle.events) {
+      const alpha = clamp(event.life / Math.min(event.maxLife, 0.32), 0, 1);
+      const color = event.tone === "danger" ? DANGER : event.tone === "signal" ? "#278e55" : event.tone === "break" ? "#8d4fdb" : event.tone === "muted" ? "#697786" : INK;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      const width = Math.max(58, event.label.length * 7 + 18);
+      roundRect(event.x - width / 2, event.y - 11, width, 22, 9, true, false);
+      text(event.label, event.x, event.y, 9, "center", color);
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawFightHud(b) {
-    text(`${state.design.name}`, 12, 50, 10, "left");
-    text(`${b.enemy.design.name}`, state.w - 12, 50, 10, "right");
-    hpBar(12, 62, 116, coreHp(b.player), BLOCKS.core.hp);
-    hpBar(state.w - 128, 62, 116, coreHp(b.enemy), BLOCKS.core.hp);
-    energyBar(12, 78, 116, b.player.energy, b.player.maxEnergy);
-    text(`${Math.floor(Math.max(0, MAX_FIGHT - b.t))}`, state.w / 2, 54, 18, "center");
+    const profile = ENEMY_PROFILES[b.enemy.design.name] || { tag: "CUSTOM", hint: "Read its movement", color: ACCENT };
+    const cleared = state.enemies.filter((enemy) => (state.records[enemy.name]?.wins || 0) > 0).length;
+    const enemyCleared = (state.records[b.enemy.design.name]?.wins || 0) > 0;
+    text(`${state.design.name}`, 12, 52, 10, "left");
+    text(`${b.enemy.design.name}`, state.w - 12, 52, 10, "right");
+    hpBar(12, 62, 110, coreHp(b.player), BLOCKS.core.hp, "#4c6fff");
+    hpBar(state.w - 122, 62, 110, coreHp(b.enemy), BLOCKS.core.hp, "#ef596f");
+    energyBar(12, 78, 110, b.player.energy, b.player.maxEnergy);
+    text(`${Math.ceil(Math.max(0, MAX_FIGHT - b.t))}`, state.w / 2, 57, 19, "center");
+    ctx.fillStyle = profile.color;
+    roundRect(state.w / 2 - 48, 80, 96, 20, 8, true, false);
+    text(profile.tag, state.w / 2, 90, 8, "center", "#fff");
+    text(`${enemyCleared ? "CLEARED" : profile.hint} · ${cleared}/${state.enemies.length}`, state.w / 2, 104, 8, "center", enemyCleared ? "#278e55" : "#657386");
+    drawSystemStatus(b.player, 12, 94, false);
+    drawSystemStatus(b.enemy, state.w - 12, 94, true);
     const y = state.h - 46;
     button("Restart", 10, y, 78, 34, false, 11);
     button("Next", 96, y, 58, 34, false, 11);
@@ -2946,30 +3245,60 @@
     addHit("build", state.w - 226, y, 64, 34);
     addHit("program", state.w - 166, y, 80, 34);
     addHit("share", state.w - 78, y, 68, 34);
+    addHit("enemyPrev", state.w / 2 - 80, 76, 24, 28);
+    addHit("enemyNext", state.w / 2 + 56, 76, 24, 28);
+    text("‹", state.w / 2 - 68, 90, 16, "center", "#657386");
+    text("›", state.w / 2 + 68, 90, 16, "center", "#657386");
+    if (b.intro > 0) {
+      ctx.fillStyle = "rgba(23,32,42,0.84)";
+      roundRect(state.w / 2 - 66, b.arena.y + b.arena.h / 2 - 24, 132, 48, 14, true, false);
+      text("SYSTEMS READY", state.w / 2, b.arena.y + b.arena.h / 2, 14, "center", "#fff");
+    }
     if (b.result) {
       const info = b.analysis || resultAnalysis(b);
       ctx.fillStyle = PAPER;
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 5;
-      const px = state.w / 2 - 126;
-      const py = state.h * 0.28;
-      ctx.fillRect(px, py, 252, 154);
-      ctx.strokeRect(px, py, 252, 154);
-      text(b.result, state.w / 2, py + 25, 30, "center");
-      text(b.reason, state.w / 2, py + 51, 12, "center");
-      text(`DMG ${info.damageDealt} / TAKEN ${info.damageTaken}`, state.w / 2, py + 76, 11, "center");
-      text(`ACC ${info.accuracy}%  LOST ${info.blocksLost}  CORE ${info.coreHp}`, state.w / 2, py + 96, 11, "center");
-      text(info.notes[0] || "", state.w / 2, py + 120, 13, "center");
-      text(info.notes[1] || "", state.w / 2, py + 139, 13, "center");
+      ctx.strokeStyle = b.result === "WIN" ? "#278e55" : b.result === "LOSE" ? DANGER : INK;
+      ctx.lineWidth = 3;
+      const px = state.w / 2 - 139;
+      const py = state.h * 0.25;
+      roundRect(px, py, 278, 188, 18, true, true);
+      text(b.newClear ? "NEW CLEAR" : b.result, state.w / 2, py + 30, b.newClear ? 24 : 32, "center", b.result === "WIN" ? "#278e55" : b.result === "LOSE" ? DANGER : INK);
+      text(`DMG ${info.damageDealt}   TAKEN ${info.damageTaken}   ACC ${info.accuracy}%`, state.w / 2, py + 64, 10, "center", "#536172");
+      text(`LOST ${info.blocksLost}   CORE ${info.coreHp}`, state.w / 2, py + 84, 10, "center", "#536172");
+      ctx.fillStyle = "#eef3f8";
+      roundRect(px + 16, py + 102, 246, 28, 10, true, false);
+      text(info.notes[0] || "", state.w / 2, py + 116, 11, "center");
+      ctx.fillStyle = "#fff5d6";
+      roundRect(px + 16, py + 140, 246, 32, 10, true, false);
+      text(info.nextFix, state.w / 2, py + 156, 11, "center", "#8d5d12");
     }
   }
 
-  function hpBar(x, y, w, hp, max) {
-    ctx.strokeStyle = INK;
+  function hpBar(x, y, w, hp, max, color = INK) {
+    ctx.strokeStyle = "#cbd7e4";
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, 9);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = color;
     ctx.fillRect(x + 2, y + 2, (w - 4) * clamp(hp / max, 0, 1), 5);
+  }
+
+  function drawSystemStatus(bot, x, y, right) {
+    const systems = [
+      ["W", bot.stats.wheels, bot.initialStats.wheels, "#4c6fff"],
+      ["G", bot.stats.guns, bot.initialStats.guns, "#ef596f"],
+      ["R", bot.stats.radars, bot.initialStats.radars, "#2aa7ba"],
+    ];
+    const totalW = systems.length * 31;
+    let px = right ? x - totalW : x;
+    for (const [label, count, initial, color] of systems) {
+      const lost = count < initial;
+      ctx.fillStyle = lost ? "#ffe6ea" : "rgba(255,255,255,0.86)";
+      ctx.strokeStyle = lost ? DANGER : color;
+      ctx.lineWidth = 1;
+      roundRect(px, y, 27, 16, 6, true, true);
+      text(`${label}${count}`, px + 13.5, y + 8, 7, "center", lost ? DANGER : color);
+      px += 31;
+    }
   }
 
   function energyBar(x, y, w, energy, max) {
@@ -3059,10 +3388,12 @@
     ctx.shadowOffsetY = opt.card ? 0 : 2;
     if (opt.selected) {
       ctx.strokeStyle = "#ffcc4d";
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([5, 4]);
       ctx.beginPath();
-      ctx.rect(Math.round(-s * 0.56), Math.round(-s * 0.56), Math.round(s * 1.12), Math.round(s * 1.12));
+      ctx.arc(0, 0, s * 0.64, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.setLineDash([]);
     }
     if (type === "core") {
       ctx.fillStyle = base;
@@ -3176,6 +3507,17 @@
       ctx.fillStyle = ink;
       ctx.fillRect(Math.round(-s * 0.04), Math.round(-s * 0.29), Math.round(s * 0.08), Math.round(s * 0.07));
       ctx.fillRect(Math.round(-s * 0.04), Math.round(s * 0.22), Math.round(s * 0.08), Math.round(s * 0.07));
+    }
+    if (opt.hpRatio != null && opt.hpRatio < 0.66) {
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = opt.hpRatio < 0.34 ? DANGER : "#4f2d35";
+      ctx.lineWidth = Math.max(2, s / 17);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.2, -s * 0.34);
+      ctx.lineTo(s * 0.02, -s * 0.08);
+      ctx.lineTo(-s * 0.08, s * 0.1);
+      ctx.lineTo(s * 0.22, s * 0.34);
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -3344,6 +3686,7 @@
     frame.last = now;
     if (state.toastT > 0) state.toastT -= dt;
     if (state.statPulseT > 0) state.statPulseT -= dt;
+    if (state.buildPopT > 0) state.buildPopT -= dt;
     if (state.mode === "fight") updateFight(dt);
     draw();
     requestAnimationFrame(frame);
